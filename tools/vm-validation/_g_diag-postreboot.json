@@ -1,0 +1,45 @@
+﻿{
+    "whoami":  "admin",
+    "pid":  2840,
+    "sessionId":  1,
+    "userInteractive":  true,
+    "winstation":  "Windows PowerShell",
+    "vmtoolsd":  [
+                     "pid=2152;sess=0",
+                     "pid=5848;sess=1"
+                 ],
+    "explorer":  [
+                     "pid=4060;sess=1"
+                 ],
+    "logonui":  [
+
+                ],
+    "wl_AutoAdminLogon":  "1",
+    "wl_DefaultUserName":  "admin",
+    "wl_DefaultPassword":  "admin@123",
+    "wl_DefaultDomainName":  "DESKTOP-3943OKD",
+    "wl_DisableCAD":  1,
+    "wl_DevicePasswordLessBuildVersion":  null,
+    "wl_AutoLogonCount":  null,
+    "runVmusr":  "\"C:\\Program Files\\VMware\\VMware Tools\\vmtoolsd.exe\" -n vmusr",
+    "gstackApp":  [
+                      "Themes",
+                      "WallpaperLibrary",
+                      "D3DCompiler_47_cor3.dll",
+                      "DesktopSuite.exe",
+                      "DesktopSuite.pdb",
+                      "PenImc_cor3.dll",
+                      "PresentationNative_cor3.dll",
+                      "vcruntime140_cor3.dll",
+                      "wpfgfx_cor3.dll"
+                  ],
+    "gstackScripts":  [
+                          "Assert-DesktopIcons.ps1",
+                          "Collect-State.ps1",
+                          "Invoke-AppUi.ps1",
+                          "_cleanbase.ps1",
+                          "_diag2.ps1"
+                      ],
+    "osCaption":  "Microsoft Windows 10 教育版",
+    "lastBoot":  "2026-08-06T08:09:25"
+}

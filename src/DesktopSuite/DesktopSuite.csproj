@@ -1,0 +1,93 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DesktopSuite</RootNamespace>
+    <AssemblyName>DesktopSuite</AssemblyName>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+  <!--
+    Single-file self-contained packaging is a PUBLISH concern, not a build concern.
+    A plain 'dotnet build' produces a normal framework-dependent x64 app (needs only
+    the .NET 8 SDK to build, and the shared framework to run via 'dotnet run').
+
+    To ship the packaged EXE, run from this folder:
+      dotnet publish -c Release -r win-x64 -p:SelfContained=true
+        -p:PublishSingleFile=true -p:PublishReadyToRun=true
+        -p:EnableCompressionInSingleFile=true
+
+    NOTE: do not enable PublishTrimmed; it crashes WPF with XamlParseException.
+    A local self-signed cert does not satisfy SmartScreen; unsigned local builds
+    carry no Mark-of-the-Web and therefore will not trigger SmartScreen.
+  -->
+
+  <ItemGroup>
+    <!-- Theme packs are content; preserve folder structure in output. -->
+    <Content Include="Themes\**\*.theme.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    P1-5: package the wallpaper library.
+
+    The time-of-day library is plain content read at runtime from
+    <AppContext.BaseDirectory>\WallpaperLibrary — by WallpaperRotator.LibraryPath and by the built-in
+    「专注」/「演示」 scenes, which point at fixed files (深夜\动态壁纸\milkyway-1.mp4 and
+    晚上\动态壁纸\night-city-1.mp4). The folder was never referenced by this project, so it existed
+    ONLY as a side effect of files having been downloaded straight into bin\; `dotnet publish` produced
+    a package with no wallpapers at all and those two scenes silently did nothing.
+
+    This glob packages the library for both build and publish whenever it is present next to the
+    .csproj. It is Condition'd on existence so a checkout without the (large) media still builds.
+
+    ExcludeFromSingleFile is REQUIRED: the ship command uses -p:PublishSingleFile=true, and these are
+    opened by file path, so they must stay as loose files beside the EXE rather than being embedded.
+
+    OPERATOR STEP (one-off, not done here — ~418MB of media must not be silently relocated):
+      move "bin\Debug\net8.0-windows\WallpaperLibrary"  "WallpaperLibrary"
+    After that move, build/publish keeps the library in sync automatically. Until then, the runtime
+    check in DesktopDiagnostics + the scene-apply guard will report the media as missing rather than
+    failing silently.
+  -->
+  <ItemGroup Condition="Exists('WallpaperLibrary')">
+    <Content Include="WallpaperLibrary\**\*" Exclude="WallpaperLibrary\**\.workbuddy\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    V6 fix: package mpv.exe. The video wallpaper renderer (MpvHost) looks for mpv.exe in
+    AppContext.BaseDirectory first; without it the 专注/演示 scenes fail with "mpv.exe was not found".
+    Condition'd on existence so a clean checkout without mpv.exe still builds.
+    ExcludeFromSingleFile: mpv.exe must be a loose file next to the app, not embedded.
+  -->
+  <ItemGroup Condition="Exists('mpv.exe')">
+    <None Include="mpv.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </None>
+  </ItemGroup>
+
+  <!-- Enabling Windows Forms (for the tray NotifyIcon) also injects global implicit usings for
+       System.Drawing / System.Windows.Forms, which collide with the WPF Brush/Panel types used
+       across the theme and window code. Drop the global ones; TrayManager.cs carries its own
+       explicit `using System.Drawing;` / `using System.Windows.Forms;` where it actually needs them. -->
+  <ItemGroup>
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Drawing.Drawing2D" />
+    <Using Remove="System.Drawing.Imaging" />
+    <Using Remove="System.Drawing.Text" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+</Project>

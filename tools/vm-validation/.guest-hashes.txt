@@ -1,0 +1,4 @@
+﻿D:\WorkBuddy\桌面美化\tools\vm-validation\guest\Assert-DesktopIcons.ps1|3155E5DE8F4523DC4CE927902F760DF08C3D556085FB680A02F7666D15B094FD
+D:\WorkBuddy\桌面美化\tools\vm-validation\guest\Collect-State.ps1|0BF1143FC447CFC193DA3B3E44E18BB4A9D7315278BA662AD388AD924221318F
+D:\WorkBuddy\桌面美化\tools\vm-validation\Assert-DesktopIcons.ps1|NOT_FOUND
+D:\WorkBuddy\桌面美化\tools\vm-validation\Collect-State.ps1|NOT_FOUND

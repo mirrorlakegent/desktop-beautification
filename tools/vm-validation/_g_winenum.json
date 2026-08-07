@@ -1,0 +1,36 @@
+﻿{
+    "sessionId":  1,
+    "findProgman":  "0",
+    "findProgmanTitled":  "65824",
+    "topLevelProgmanLike":  [
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4148",
+                                "WorkerW||vis=False|pid=4060",
+                                "WorkerW||vis=False|pid=4060",
+                                "Progman|Program Manager|vis=True|pid=4060"
+                            ],
+    "topLevelCount":  99,
+    "desktopChildren":  [
+                            "WorkerW||vis=False|pid=4060|h=66064",
+                            "WorkerW||vis=False|pid=4060|h=66014",
+                            "WorkerW||vis=False|pid=4060|h=65954",
+                            "WorkerW||vis=False|pid=4060|h=65956",
+                            "WorkerW||vis=False|pid=4060|h=65846",
+                            "WorkerW||vis=False|pid=4060|h=65838",
+                            "WorkerW||vis=False|pid=4060|h=65836",
+                            "WorkerW||vis=False|pid=4148|h=131420",
+                            "WorkerW||vis=False|pid=4060|h=65734",
+                            "WorkerW||vis=False|pid=4060|h=65730",
+                            "Progman|Program Manager|vis=True|pid=4060|h=65824",
+                            "SHELLDLL_DefView||vis=True|pid=4060|h=65826"
+                        ],
+    "explorerProcs":  [
+                          "pid=4060;sess=1"
+                      ]
+}

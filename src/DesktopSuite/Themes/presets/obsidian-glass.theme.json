@@ -1,0 +1,395 @@
+{
+  "$schema": "../theme-schema.json",
+  "formatVersion": "1.0",
+  "id": "io.deskkit.obsidian-glass",
+
+  "meta": {
+    "name": "曜岩玻璃",
+    "version": "1.0.0",
+    "author": "DeskKit",
+    "description": "深空冷调的玻璃拟态。默认主题，最百搭，适合任何壁纸。克制的蓝加一点青绿提神。",
+    "tags": ["dark", "glass", "acrylic", "blue", "default"],
+    "preview": "assets/preview/cover.png",
+    "license": "CC-BY-4.0",
+    "colorMode": "dark"
+  },
+
+  "capabilities": {
+    "minEngineVersion": "1.0.0",
+    "requires": ["transparency"],
+    "performanceTier": "balanced",
+    "degradeTo": "io.deskkit.obsidian-glass-lite"
+  },
+
+  "consistency": {
+    "profile": "strict",
+    "contrastStandard": "APCA",
+    "contrastFloor": { "bodyText": 75, "largeText": 60, "uiElement": 45, "decorative": 15 },
+    "adaptiveScrim": {
+      "enabled": true,
+      "appliesTo": ["dock", "widgets", "iconLabels", "zones"],
+      "strategy": "auto",
+      "maxOpacity": 0.55,
+      "maxBlur": 40,
+      "sampleIntervalMs": 400,
+      "sampleDownscale": 32,
+      "hysteresis": 0.08,
+      "transitionMs": 600
+    },
+    "polarityFlip": { "enabled": true, "scope": "per-element", "threshold": 0.55, "hysteresis": 0.06 },
+    "elevationOrder": ["wallpaper", "scrim", "desktopIcons", "zones", "widgets", "dock", "overlay"],
+    "tokenLock": ["radius", "material", "motion", "typography.fontFamilies"],
+    "maxDistinctRadii": 3,
+    "maxHueFamilies": 3
+  },
+
+  "tokens": {
+    "palette": {
+      "primary":   { "500": "#4C8DFF", "700": "#1C5BC9" },
+      "secondary": { "500": "#7C9CBF", "700": "#486686" },
+      "accent":    { "500": "#38E1C6", "700": "#007B65" },
+      "neutral":   { "500": "#5A6678" },
+
+      "surface": {
+        "base":         "#131A249E",
+        "raised":       "#1B2431CC",
+        "sunken":       "#0D131BB3",
+        "overlay":      "#1B2431F2",
+        "border":       "#FFFFFF1F",
+        "borderStrong": "#FFFFFF38"
+      },
+
+      "text": {
+        "primary":   { "$contrast": { "against": "auto:widget", "target": 75, "seed": "#E6EDF6" } },
+        "secondary": { "$contrast": { "against": "auto:widget", "target": 60, "seed": "#9AAABF" } },
+        "tertiary":  { "$contrast": { "against": "auto:widget", "target": 45, "seed": "#6B7C93" } },
+        "inverse":   "#0B0F16",
+        "onAccent":  { "$contrast": { "against": "palette.accent.500", "target": 60, "seed": "#04201A" } }
+      },
+
+      "semantic": {
+        "success": "#3FCF8E",
+        "warning": "#F5B544",
+        "danger":  "#FF5C68",
+        "info":    { "$ref": "palette.primary.500" }
+      }
+    },
+
+    "derivation": {
+      "enabled": true,
+      "algorithm": "kmeans",
+      "sampleRegions": [
+        { "id": "full",       "rect": { "x": 0,    "y": 0,    "w": 1,   "h": 1    } },
+        { "id": "dockStrip",  "rect": { "x": 0.2,  "y": 0.86, "w": 0.6, "h": 0.14 } },
+        { "id": "widgetArea", "rect": { "x": 0.68, "y": 0.03, "w": 0.3, "h": 0.4  } },
+        { "id": "iconArea",   "rect": { "x": 0,    "y": 0,    "w": 0.3, "h": 0.5  } }
+      ],
+      "mixWithBase": 0.35,
+      "updatePolicy": "onWallpaperChange",
+      "transitionMs": 800,
+      "minSaturation": 0.04
+    },
+
+    "radius": { "none": 0, "sm": 8, "md": 14, "lg": 22, "pill": 9999, "shape": "round" },
+
+    "spacing": { "base": 4, "scale": [0, 4, 8, 12, 16, 24, 32, 48, 64, 96] },
+
+    "elevation": {
+      "level0": { "shadows": [] },
+      "level1": {
+        "shadows": [{ "y": 2, "blur": 8, "spread": -3, "color": "#00000099" }],
+        "rimLight": "#FFFFFF14", "rimWidth": 1
+      },
+      "level2": {
+        "shadows": [
+          { "y": 6, "blur": 18, "spread": -5, "color": "#000000A6" },
+          { "y": 1, "blur": 3,  "spread": 0,  "color": "#00000059" }
+        ],
+        "rimLight": "#FFFFFF1F", "rimWidth": 1
+      },
+      "level3": {
+        "shadows": [
+          { "y": 10, "blur": 30, "spread": -8, "color": "#000000B3" },
+          { "y": 2,  "blur": 8,  "spread": -2, "color": "#00000066" }
+        ],
+        "rimLight": "#FFFFFF26", "rimWidth": 1
+      },
+      "level4": {
+        "shadows": [{ "y": 18, "blur": 48, "spread": -12, "color": "#000000CC" }],
+        "rimLight": "#FFFFFF2E", "rimWidth": 1
+      }
+    },
+
+    "material": {
+      "dockPlate": {
+        "type": "acrylic",
+        "blurRadius": 32,
+        "tint": { "$ref": "palette.surface.base" },
+        "tintOpacity": 0.62,
+        "luminosityOpacity": 0.4,
+        "saturation": 1.3,
+        "noise": { "opacity": 0.03, "texture": "builtin://noise-fine", "scale": 1 },
+        "border": {
+          "width": 1,
+          "gradient": {
+            "angle": 180,
+            "stops": [
+              { "at": 0, "color": "#FFFFFF2E" },
+              { "at": 0.5, "color": "#FFFFFF14" },
+              { "at": 1, "color": "#FFFFFF0A" }
+            ]
+          }
+        },
+        "fallback": "solidPlate"
+      },
+      "widgetPlate": {
+        "type": "acrylic",
+        "blurRadius": 32,
+        "tint": { "$ref": "palette.surface.base" },
+        "tintOpacity": 0.62,
+        "luminosityOpacity": 0.4,
+        "saturation": 1.3,
+        "noise": { "opacity": 0.03, "texture": "builtin://noise-fine", "scale": 1 },
+        "border": { "width": 1, "color": { "$ref": "palette.surface.border" } },
+        "fallback": "solidPlate"
+      },
+      "zonePlate": {
+        "type": "acrylic",
+        "blurRadius": 20,
+        "tint": { "$ref": "palette.surface.sunken" },
+        "tintOpacity": 0.45,
+        "luminosityOpacity": 0.3,
+        "saturation": 1.15,
+        "border": { "width": 1, "color": { "$ref": "palette.surface.border" } },
+        "fallback": "solidPlate"
+      },
+      "solidPlate": {
+        "type": "solid",
+        "tint": "#131A24F2",
+        "tintOpacity": 1,
+        "border": { "width": 1, "color": { "$ref": "palette.surface.border" } }
+      }
+    },
+
+    "typography": {
+      "fontFamilies": {
+        "display": ["Inter", "Segoe UI Variable Display", "Microsoft YaHei UI", "sans-serif"],
+        "body":    ["Inter", "Segoe UI", "Microsoft YaHei UI", "sans-serif"],
+        "mono":    ["JetBrains Mono", "Cascadia Code", "Consolas", "monospace"],
+        "numeric": ["Inter", "Segoe UI Variable Display", "sans-serif"]
+      },
+      "scale": {
+        "hero":     { "size": 56, "lineHeight": 0.94, "weight": 300, "letterSpacing": -0.045 },
+        "title":    { "size": 20, "lineHeight": 1.3,  "weight": 600, "letterSpacing": -0.02 },
+        "body":     { "size": 13, "lineHeight": 1.5,  "weight": 400, "letterSpacing": 0 },
+        "caption":  { "size": 11, "lineHeight": 1.4,  "weight": 400, "letterSpacing": 0.01 },
+        "overline": { "size": 10, "lineHeight": 1.3,  "weight": 600, "letterSpacing": 0.16, "transform": "uppercase" },
+        "iconLabel":{ "size": 11, "lineHeight": 1.25, "weight": 500, "letterSpacing": 0 }
+      }
+    },
+
+    "motion": {
+      "duration": { "instant": 100, "fast": 160, "normal": 260, "slow": 420, "ambient": 1200 },
+      "easing": {
+        "standard":   { "cubicBezier": [0.2, 0.8, 0.2, 1] },
+        "decelerate": { "cubicBezier": [0, 0, 0, 1] },
+        "accelerate": { "cubicBezier": [0.3, 0, 1, 1] },
+        "spring":     { "spring": { "stiffness": 420, "damping": 32, "mass": 1 } }
+      },
+      "energy": "standard",
+      "respectReducedMotion": true
+    },
+
+    "iconography": { "style": "original", "strokeWidth": 1.75, "grid": 24, "cornerRadius": 12 }
+  },
+
+  "wallpaper": {
+    "layers": [
+      {
+        "id": "base-aurora",
+        "type": "shader",
+        "src": "builtin://shader/aurora",
+        "uniforms": {
+          "u_colorA": { "$ref": "palette.primary.500" },
+          "u_colorB": { "$ref": "palette.accent.500" },
+          "u_colorBg": "#0B0F16",
+          "u_speed": 0.18,
+          "u_scale": 1.4
+        },
+        "quality": "medium",
+        "fps": 30,
+        "contributesToColorExtraction": true
+      },
+      {
+        "id": "dock-scrim",
+        "type": "scrim",
+        "anchor": "bottom",
+        "sizePct": 0.3,
+        "color": "#00000059",
+        "falloff": "easeOut",
+        "contributesToColorExtraction": false
+      }
+    ],
+    "monitorStrategy": "duplicate",
+    "playback": {
+      "pauseWhen": ["fullscreenApp", "desktopHidden", "onBattery"],
+      "cpuThreshold": 70,
+      "fpsCap": 30,
+      "fpsCapOnBattery": 10,
+      "audio": "mute",
+      "resumeFadeMs": 400
+    },
+    "transition": { "type": "fade", "durationMs": 900, "easing": { "cubicBezier": [0.2, 0.8, 0.2, 1] } }
+  },
+
+  "dock": {
+    "enabled": true,
+    "edge": "bottom",
+    "align": "center",
+    "offset": { "x": 0, "y": 16 },
+    "monitor": "primary",
+
+    "metrics": { "iconSize": 48, "iconGap": 12, "padding": 12, "maxIcons": 24, "overflow": "shrink" },
+
+    "surface": { "material": "dockPlate", "radius": "lg", "elevation": "level3", "mode": "panel" },
+
+    "autoHide": {
+      "mode": "onWindowOverlap",
+      "revealZonePx": 4,
+      "revealDelayMs": 80,
+      "hideDelayMs": 500,
+      "animation": "slideFade"
+    },
+
+    "iconStyle": {
+      "source": "auto",
+      "shape": "original",
+      "maskOriginalIcon": false,
+      "monochrome": { "enabled": false },
+      "shadow": { "y": 2, "blur": 6, "spread": -2, "color": "#00000073" },
+      "label": { "policy": "hover", "placement": "tooltip", "typography": "caption" }
+    },
+
+    "indicator": {
+      "type": "dot",
+      "size": 4,
+      "color": { "$ref": "palette.text.tertiary" },
+      "activeColor": { "$ref": "palette.primary.500" },
+      "multiWindowStyle": "multiDot"
+    },
+
+    "hover": {
+      "effect": "magnify",
+      "magnifyScale": 1.45,
+      "magnifyRange": 2,
+      "duration": "fast",
+      "easing": "spring"
+    },
+
+    "click": { "effect": "bounce", "launchAnimation": "bounceLoop" },
+
+    "reflection": { "enabled": false },
+
+    "items": [
+      { "type": "app", "id": "browser" },
+      { "type": "app", "id": "terminal" },
+      { "type": "app", "id": "editor" },
+      { "type": "separator" },
+      { "type": "runningApps" },
+      { "type": "spacer" },
+      { "type": "trash" }
+    ]
+  },
+
+  "widgets": {
+    "grid": { "columns": 24, "rows": 12, "gutter": 16, "margin": 32, "snap": true, "reserveDockArea": true },
+
+    "defaults": {
+      "material": "widgetPlate",
+      "radius": "lg",
+      "elevation": "level2",
+      "padding": 16,
+      "titleTypography": "overline",
+      "bodyTypography": "body",
+      "accentColor": { "$ref": "palette.accent.500" },
+      "density": "comfortable",
+      "chromeless": false
+    },
+
+    "instances": [
+      {
+        "id": "clock-main",
+        "type": "clock",
+        "rect": { "col": 17, "row": 0, "colSpan": 6, "rowSpan": 3 },
+        "config": { "format": "HH:mm", "showDate": true, "showSeconds": false, "locale": "zh-CN" }
+      },
+      {
+        "id": "weather-main",
+        "type": "weather",
+        "rect": { "col": 17, "row": 3, "colSpan": 3, "rowSpan": 2 },
+        "config": { "unit": "celsius", "autoLocate": true }
+      },
+      {
+        "id": "sysmon",
+        "type": "systemMonitor",
+        "rect": { "col": 20, "row": 3, "colSpan": 3, "rowSpan": 2 },
+        "style": { "density": "compact" },
+        "config": { "metrics": ["cpu", "memory"], "graphStyle": "bar" }
+      }
+    ]
+  },
+
+  "desktop": {
+    "icons": {
+      "visibility": "rules",
+      "rules": [
+        { "match": { "kind": "systemItem" }, "action": "hide", "note": "隐藏回收站等系统项，改由 Dock 承载" },
+        { "match": { "extensions": [".tmp", ".log", ".crdownload"] }, "action": "hide", "note": "隐藏临时文件" },
+        { "match": { "extensions": [".docx", ".pdf", ".xlsx", ".pptx"] }, "action": "moveToZone", "zoneId": "zone-docs", "note": "文档自动归入项目文档区" },
+        { "match": { "kind": "any" }, "action": "show" }
+      ],
+      "autoHideIdle": { "enabled": false },
+      "style": {
+        "size": 48,
+        "gridGap": 16,
+        "shape": "original",
+        "label": {
+          "color": { "$contrast": { "against": "auto:iconLabel", "target": 75, "seed": "#E6EDF6" } },
+          "typography": "iconLabel",
+          "maxLines": 2,
+          "protection": "auto",
+          "hideLabels": false
+        },
+        "sortBy": "manual"
+      }
+    },
+
+    "zones": [
+      {
+        "id": "zone-docs",
+        "title": "项目文档",
+        "rect": { "col": 4, "row": 0, "colSpan": 5, "rowSpan": 4 },
+        "style": {
+          "material": "zonePlate",
+          "radius": "lg",
+          "elevation": "level1",
+          "titleTypography": "overline",
+          "borderStyle": "solid"
+        },
+        "layout": "grid",
+        "collapsible": true,
+        "collapsed": false,
+        "accepts": { "extensions": [".docx", ".pdf", ".xlsx", ".pptx", ".md"] },
+        "scrollable": true
+      }
+    ],
+
+    "autoOrganize": {
+      "enabled": true,
+      "engine": "rules",
+      "trigger": "onNewFile",
+      "dryRun": true,
+      "physicalMove": false
+    }
+  }
+}

@@ -1,0 +1,5 @@
+﻿V7 | PASS | 
+V3 | BLOCKED | ★托盘「退出（保留壁纸）」: tray-icon-not-found :: 通知区域中找不到 DesktopSuite 托盘图标（可能被折叠进溢出区且 UIA 不可见）。 —— 无法自动执行托盘退出。注意：不得用 taskkill 或关闭窗口来替代，那走的是完全不同的代码路径（× 只最小化到托盘），会把用例验成假结果。此步需转人工。 ｜ 本用例的触发方式不可替代：点 × 只最小化到托盘、taskkill 是异常退出（V14 语义），都会把 V3 验成假结果。请人工执行本用例，或参考：V11-A/V12 已自动覆盖 RestoreIconsOnTeardown 的同一段代码（含意图保护），只是触发源不同。
+V4 | BLOCKED | 托盘退出: tray-icon-not-found：与 V3 同因，托盘路径不可自动化时本用例必须人工执行（不得用 taskkill 替代）
+V9 | FAIL | ★P1-7：Unknown 期间 intent 未被改写: critical，P1-7 回归：False → True ｜ 日志出现 Unknown 不落盘记录: 命中 0 次，期望 1..2147483647（模式 /判定为 Unknown，不落盘 intent/）
+V13 | NA | 本靶机为 VMware 单虚拟显示器，无法构造 ≥2 屏场景；DPI 缩放虽可改注册表，但需注销生效且属视觉判据（文字模糊/控件重叠/裁切），截图无法机器判读。V13 为观察项（非 FAIL 判据），建议在物理机或多显示器 VM 上人工执行。

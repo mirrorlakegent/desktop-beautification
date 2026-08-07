@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeskKit 设计系统预览</title>
+<style>
+/* ============================================================
+   页面外壳（中性，不参与主题演示）
+   ============================================================ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --page-bg:#0a0c10;
+  --page-panel:#12151c;
+  --page-panel-2:#171b24;
+  --page-line:#232936;
+  --page-line-2:#2e3646;
+  --page-t1:#e8ecf3;
+  --page-t2:#96a1b5;
+  --page-t3:#5f6b80;
+  --page-acc:#5b9dff;
+  --sans:'Inter','Segoe UI Variable Text','Segoe UI','Microsoft YaHei UI','PingFang SC',system-ui,sans-serif;
+  --mono:ui-monospace,'Cascadia Code','JetBrains Mono',Consolas,'Courier New',monospace;
+}
+
+html{scroll-behavior:smooth}
+body{
+  background:var(--page-bg);
+  color:var(--page-t1);
+  font-family:var(--sans);
+  font-size:15px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  padding-bottom:96px;
+}
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(900px 500px at 12% -8%, #1b2b4d55, transparent 70%),
+    radial-gradient(700px 400px at 88% 4%, #2a1b4d44, transparent 70%);
+}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px;position:relative;z-index:1}
+
+/* --- 标题 --- */
+.hero{padding:88px 0 56px;border-bottom:1px solid var(--page-line)}
+.eyebrow{
+  font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--page-acc);margin-bottom:20px;display:flex;align-items:center;gap:10px;
+}
+.eyebrow::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--page-line-2),transparent)}
+h1{font-size:52px;line-height:1.08;letter-spacing:-.03em;font-weight:680;margin-bottom:18px}
+h1 em{font-style:normal;background:linear-gradient(100deg,#5b9dff,#38e1c6 55%,#b07aff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lede{font-size:18px;color:var(--page-t2);max-width:720px;line-height:1.7}
+.meta-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:28px}
+.chip{
+  font-family:var(--mono);font-size:11.5px;padding:5px 11px;border-radius:6px;
+  background:var(--page-panel-2);border:1px solid var(--page-line-2);color:var(--page-t2);
+}
+
+/* --- 区块 --- */
+section{padding:64px 0;border-bottom:1px solid var(--page-line)}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+.sec-num{font-family:var(--mono);font-size:12px;color:var(--page-acc);letter-spacing:.1em}
+h2{font-size:28px;letter-spacing:-.02em;font-weight:640}
+.sec-sub{color:var(--page-t2);max-width:760px;margin-bottom:36px;font-size:15px}
+
+h3{font-size:15px;font-weight:620;margin:36px 0 14px;letter-spacing:-.01em}
+h3:first-of-type{margin-top:0}
+
+/* --- 架构图 --- */
+.arch{display:grid;gap:12px;font-family:var(--mono);font-size:12.5px}
+.arch-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.arch-box{
+  flex:1;min-width:150px;padding:14px 16px;border-radius:10px;
+  background:var(--page-panel);border:1px solid var(--page-line-2);
+}
+.arch-box b{display:block;font-size:13px;color:var(--page-t1);margin-bottom:3px;font-weight:600}
+.arch-box span{color:var(--page-t3);font-size:11.5px;line-height:1.5;display:block}
+.arch-box.ai{border-color:#3d5a8c;background:linear-gradient(180deg,#141b2b,#12151c)}
+.arch-box.ai b{color:#7db2ff}
+.arch-box.det{border-color:#2f5c4a;background:linear-gradient(180deg,#111c18,#12151c)}
+.arch-box.det b{color:#4fd6a0}
+.arch-box.out{border-color:#5c4a2f;background:linear-gradient(180deg,#1c1811,#12151c)}
+.arch-box.out b{color:#e0b264}
+.arch-arrow{text-align:center;color:var(--page-line-2);font-size:16px;line-height:1}
+.arch-note{
+  font-family:var(--sans);font-size:12.5px;color:var(--page-t3);
+  text-align:center;padding:8px 0;
+}
+
+/* --- 主题切换器 --- */
+.switcher{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}
+.sw{
+  display:flex;align-items:center;gap:10px;padding:9px 15px 9px 11px;border-radius:9px;
+  background:var(--page-panel);border:1px solid var(--page-line-2);color:var(--page-t2);
+  cursor:pointer;font-family:inherit;font-size:13.5px;transition:all .16s ease;
+}
+.sw:hover{border-color:#3c465c;color:var(--page-t1)}
+.sw[aria-pressed="true"]{background:var(--page-panel-2);border-color:var(--page-acc);color:var(--page-t1);box-shadow:0 0 0 1px #5b9dff33}
+.sw-dots{display:flex;gap:3px}
+.sw-dots i{width:9px;height:9px;border-radius:50%;display:block}
+.sw small{display:block;font-size:10.5px;color:var(--page-t3);font-family:var(--mono);letter-spacing:.04em}
+
+/* ============================================================
+   主题 Token —— 四套预置主题
+   切换 data-theme 时，下面所有模块（壁纸/图标/小组件/Dock）
+   全部自动换装。这正是「一组 Token 驱动四个模块」的证明。
+   ============================================================ */
+.stage{
+  --bg:#0B0F16; --surface:#131A249E; --raised:#1B2431; --border:#FFFFFF1F;
+  --primary:#4C8DFF; --secondary:#7C9CBF; --accent:#38E1C6;
+  --t1:#E6EDF6; --t2:#9AAABF; --t3:#6B7C93;
+  --ok:#3FCF8E; --warn:#F5B544; --err:#FF5C68;
+  --r-sm:8px; --r-md:14px; --r-lg:22px; --r-dock:22px; --r-icon:12px;
+  --blur:32px; --sat:1.3;
+  --shadow:0 8px 28px -6px #00000099, 0 2px 8px -2px #00000066;
+  --shadow-sm:0 3px 12px -3px #0000008c;
+  --rim:inset 0 1px 0 #ffffff26;
+  --glow:none;
+  --f-disp:'Inter','Segoe UI Variable Display','Microsoft YaHei UI',sans-serif;
+  --f-body:'Inter','Segoe UI','Microsoft YaHei UI',sans-serif;
+  --f-num:'Inter','Segoe UI Variable Display',sans-serif;
+  --dur:180ms; --ease:cubic-bezier(.2,.8,.2,1);
+  --wall:
+    radial-gradient(780px 520px at 18% 12%, #1e3a6e 0%, transparent 62%),
+    radial-gradient(680px 480px at 82% 78%, #123f4a 0%, transparent 60%),
+    radial-gradient(500px 400px at 62% 22%, #2b2a63 0%, transparent 62%),
+    linear-gradient(168deg,#0d1320 0%,#0a0e17 100%);
+  --texture:none;
+  --icon-fx:none;
+  --label-shadow:0 1px 3px #000000cc;
+}
+
+.stage[data-theme="paper"]{
+  --bg:#F5F3EF; --surface:#FFFFFFDB; --raised:#FFFFFF; --border:#14181C14;
+  --primary:#1F2933; --secondary:#5B6670; --accent:#C8452F;
+  --t1:#14181C; --t2:#5B6670; --t3:#8A939E;
+  --ok:#2E7D5B; --warn:#B07A1B; --err:#C0392B;
+  --r-sm:6px; --r-md:10px; --r-lg:14px; --r-dock:14px; --r-icon:9px;
+  --blur:12px; --sat:1;
+  --shadow:0 6px 20px -8px #14181c26, 0 1px 3px #14181c14;
+  --shadow-sm:0 2px 6px -2px #14181c1f;
+  --rim:inset 0 1px 0 #ffffff;
+  --glow:none;
+  --dur:230ms; --ease:cubic-bezier(.2,.7,.3,1);
+  --wall:
+    radial-gradient(760px 520px at 78% 14%, #f0e6dc 0%, transparent 64%),
+    radial-gradient(620px 440px at 14% 82%, #e6ebe8 0%, transparent 62%),
+    linear-gradient(168deg,#faf8f5 0%,#f0eee9 100%);
+  --texture:none;
+  --label-shadow:none;
+}
+
+.stage[data-theme="neon"]{
+  --bg:#08040F; --surface:#170C298C; --raised:#22103A; --border:#FF2E9759;
+  --primary:#FF2E97; --secondary:#7B2FFF; --accent:#00F0FF;
+  --t1:#F4E9FF; --t2:#B79BDD; --t3:#7E63A8;
+  --ok:#39FF88; --warn:#FFC531; --err:#FF3B5C;
+  --r-sm:4px; --r-md:6px; --r-lg:10px; --r-dock:10px; --r-icon:5px;
+  --blur:20px; --sat:1.6;
+  --shadow:0 0 0 1px #ff2e9740, 0 10px 40px -10px #ff2e9759;
+  --shadow-sm:0 0 16px -4px #ff2e9766;
+  --rim:inset 0 1px 0 #ffffff1f;
+  --glow:0 0 22px -2px #00f0ff8c;
+  --dur:140ms; --ease:cubic-bezier(.34,1.56,.64,1);
+  --wall:
+    radial-gradient(620px 460px at 76% 20%, #6b1560 0%, transparent 62%),
+    radial-gradient(560px 420px at 20% 76%, #16255e 0%, transparent 60%),
+    radial-gradient(420px 340px at 48% 50%, #3d0f52 0%, transparent 66%),
+    linear-gradient(170deg,#0d0518 0%,#06030c 100%);
+  --texture:
+    repeating-linear-gradient(90deg,#ff2e9714 0 1px,transparent 1px 44px),
+    repeating-linear-gradient(0deg,#00f0ff10 0 1px,transparent 1px 44px);
+  --label-shadow:0 0 8px #00f0ff80;
+}
+
+.stage[data-theme="phosphor"]{
+  --bg:#050A07; --surface:#0A1410E6; --raised:#0F1F16; --border:#3DF07C33;
+  --primary:#3DF07C; --secondary:#1F8A4C; --accent:#A8FF60;
+  --t1:#C9FFD9; --t2:#63B37F; --t3:#3E7355;
+  --ok:#3DF07C; --warn:#FFD166; --err:#FF6B4A;
+  --r-sm:0px; --r-md:0px; --r-lg:0px; --r-dock:0px; --r-icon:0px;
+  --blur:0px; --sat:1;
+  --shadow:0 0 0 1px #3df07c2e;
+  --shadow-sm:0 0 0 1px #3df07c26;
+  --rim:none;
+  --glow:0 0 16px -3px #3df07c73;
+  --f-disp:var(--mono); --f-body:var(--mono); --f-num:var(--mono);
+  --dur:100ms; --ease:linear;
+  --wall:
+    radial-gradient(700px 520px at 50% 42%, #0a1f14 0%, transparent 66%),
+    linear-gradient(180deg,#060d09 0%,#030604 100%);
+  --texture:repeating-linear-gradient(0deg,#3df07c0f 0 1px,transparent 1px 3px);
+  --label-shadow:0 0 6px #3df07c66;
+}
+
+/* ============================================================
+   模拟桌面
+   ============================================================ */
+.stage{
+  border-radius:14px;overflow:hidden;border:1px solid var(--page-line-2);
+  box-shadow:0 24px 70px -20px #000000cc;
+}
+.desktop{
+  position:relative;aspect-ratio:16/9.6;min-height:440px;
+  background:var(--wall);
+  font-family:var(--f-body);
+  isolation:isolate;
+}
+.desktop::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:var(--texture);opacity:.9;z-index:1;
+}
+/* 手工 scrim 层：底部渐隐给 Dock 垫底（对应 Schema 的 type:"scrim"） */
+.desktop::before{
+  content:'';position:absolute;left:0;right:0;bottom:0;height:30%;z-index:1;
+  background:linear-gradient(to top,#00000059,transparent);pointer-events:none;
+}
+.stage[data-theme="paper"] .desktop::before{background:linear-gradient(to top,#14181c14,transparent)}
+
+/* --- 桌面图标（z=2） --- */
+.icons{position:absolute;top:26px;left:26px;z-index:3;display:grid;grid-template-columns:repeat(2,74px);gap:6px}
+.dicon{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 4px;border-radius:var(--r-sm);cursor:default;transition:background var(--dur) var(--ease)}
+.dicon:hover{background:#ffffff14}
+.stage[data-theme="paper"] .dicon:hover{background:#14181c0f}
+.dicon .tile{
+  width:42px;height:42px;border-radius:var(--r-icon);display:grid;place-items:center;
+  box-shadow:var(--shadow-sm);
+}
+.dicon .lbl{
+  font-size:10.5px;color:var(--t1);text-align:center;line-height:1.25;
+  text-shadow:var(--label-shadow);max-width:70px;
+}
+/* 分组区（zone），比小组件"更沉" */
+.zone{
+  position:absolute;z-index:2;top:24px;left:132px;width:196px;
+  border-radius:var(--r-lg);border:1px solid var(--border);
+  background:color-mix(in srgb, var(--surface) 55%, transparent);
+  backdrop-filter:blur(calc(var(--blur) * .6)) saturate(var(--sat));
+  -webkit-backdrop-filter:blur(calc(var(--blur) * .6)) saturate(var(--sat));
+  padding:10px;
+}
+.zone-t{
+  font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);
+  margin-bottom:8px;font-family:var(--f-disp);font-weight:600;
+}
+.stage[data-theme="phosphor"] .zone-t::before{content:'> '}
+.zone-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.zone-grid i{aspect-ratio:1;border-radius:calc(var(--r-icon) * .7);background:var(--raised);border:1px solid var(--border);display:block;opacity:.85}
+
+/* --- 小组件（z=4） --- */
+.widgets{position:absolute;z-index:4;top:26px;right:26px;width:296px;display:grid;gap:14px}
+.w{
+  border-radius:var(--r-lg);border:1px solid var(--border);
+  background:var(--surface);
+  backdrop-filter:blur(var(--blur)) saturate(var(--sat));
+  -webkit-backdrop-filter:blur(var(--blur)) saturate(var(--sat));
+  box-shadow:var(--shadow),var(--rim);
+  padding:16px 18px;color:var(--t1);
+  transition:transform var(--dur) var(--ease);
+}
+.w:hover{transform:translateY(-2px)}
+.w-cap{
+  font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--t3);
+  font-weight:600;margin-bottom:8px;font-family:var(--f-disp);
+}
+.stage[data-theme="phosphor"] .w-cap::before{content:'> '}
+.clock{font-family:var(--f-num);font-size:52px;line-height:.94;letter-spacing:-.045em;font-weight:300;font-variant-numeric:tabular-nums}
+.stage[data-theme="phosphor"] .clock{font-weight:500;letter-spacing:-.01em;font-size:46px;text-shadow:var(--glow)}
+.stage[data-theme="neon"] .clock{text-shadow:0 0 18px #00f0ff73}
+.clock-sub{font-size:11.5px;color:var(--t2);margin-top:6px}
+.w-split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.temp{font-family:var(--f-num);font-size:30px;font-weight:400;letter-spacing:-.03em}
+.stat-row{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;color:var(--t2);margin-bottom:5px}
+.stat-row b{color:var(--t1);font-family:var(--f-num);font-weight:600;font-variant-numeric:tabular-nums}
+.bar{height:5px;border-radius:99px;background:var(--border);overflow:hidden;margin-bottom:11px}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--primary);box-shadow:var(--glow)}
+.bar.a i{background:var(--accent)}
+/* 磷光主题：进度条改为 ASCII 块 */
+.stage[data-theme="phosphor"] .bar{height:auto;background:none;border-radius:0;font-family:var(--mono);font-size:11px;color:var(--primary);letter-spacing:1px;margin-bottom:9px}
+.stage[data-theme="phosphor"] .bar i{display:none}
+.stage[data-theme="phosphor"] .bar::before{content:'████████░░░░'}
+.stage[data-theme="phosphor"] .bar.a::before{content:'█████░░░░░░░'}
+
+/* --- Dock（z=5） --- */
+.dock{
+  position:absolute;z-index:5;left:50%;bottom:18px;transform:translateX(-50%);
+  display:flex;align-items:flex-end;gap:10px;padding:10px;
+  border-radius:var(--r-dock);border:1px solid var(--border);
+  background:var(--surface);
+  backdrop-filter:blur(var(--blur)) saturate(var(--sat));
+  -webkit-backdrop-filter:blur(var(--blur)) saturate(var(--sat));
+  box-shadow:var(--shadow),var(--rim);
+}
+/* 磷光主题：无底板（plateMode:none） */
+.stage[data-theme="phosphor"] .dock{background:transparent;border-color:transparent;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
+/* 素纸主题：分离式底板（plateMode:separate） */
+.stage[data-theme="paper"] .dock{background:transparent;border-color:transparent;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;gap:12px}
+.stage[data-theme="paper"] .di{background:var(--raised);box-shadow:var(--shadow-sm);border:1px solid var(--border)}
+
+.di{
+  position:relative;width:46px;height:46px;border-radius:var(--r-icon);
+  display:grid;place-items:center;cursor:default;
+  transition:transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease), filter var(--dur) var(--ease);
+  transform-origin:bottom center;
+}
+.di svg{width:24px;height:24px;display:block}
+/* hover 效果按主题差异化 */
+.dock:hover .di{transform:scale(.97)}
+.di:hover{transform:scale(1.45) translateY(-6px)!important;z-index:2}
+.di:hover + .di,.di:has(+ .di:hover){transform:scale(1.18) translateY(-2px)}
+.stage[data-theme="paper"] .di:hover{transform:translateY(-9px)!important;box-shadow:0 12px 22px -8px #14181c33}
+.stage[data-theme="neon"] .di:hover{transform:scale(1.22)!important;box-shadow:0 0 26px -2px #00f0ffa6;filter:brightness(1.25)}
+.stage[data-theme="phosphor"] .di:hover{transform:none!important;filter:brightness(1.4) drop-shadow(0 0 8px #3df07c)}
+.stage[data-theme="phosphor"] .di:hover::after{content:'';position:absolute;inset:-3px;border:1px solid var(--primary);pointer-events:none}
+
+/* 运行指示器：四套主题四种形态 */
+.di.on::before{
+  content:'';position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);
+  width:4px;height:4px;border-radius:50%;background:var(--primary);
+}
+.stage[data-theme="paper"] .di.on::before{width:16px;height:2px;border-radius:0;bottom:-7px;background:var(--accent)}
+.stage[data-theme="neon"] .di.on::before{width:100%;height:100%;bottom:0;border-radius:var(--r-icon);background:transparent;border:1px solid var(--accent);box-shadow:0 0 14px -1px #00f0ff99,inset 0 0 10px -4px #00f0ff99}
+.stage[data-theme="phosphor"] .di.on::before{width:18px;height:2px;border-radius:0;bottom:-5px;background:var(--primary);box-shadow:var(--glow)}
+
+.dsep{width:1px;height:32px;background:var(--border);margin:0 2px;align-self:center}
+
+/* Dock 图标底色（模拟不同 iconTreatment） */
+.di[data-c="1"]{background:linear-gradient(160deg,#4C8DFF,#2E6BD6)}
+.di[data-c="2"]{background:linear-gradient(160deg,#38E1C6,#1FA893)}
+.di[data-c="3"]{background:linear-gradient(160deg,#F5B544,#D68A1E)}
+.di[data-c="4"]{background:linear-gradient(160deg,#FF5C68,#D63A50)}
+.di[data-c="5"]{background:linear-gradient(160deg,#A77BFF,#7B4BD6)}
+.di[data-c="6"]{background:linear-gradient(160deg,#7C9CBF,#556E8C)}
+.di svg{color:#fff;opacity:.96}
+/* 霓虹：图标 duotone 统一染色 */
+.stage[data-theme="neon"] .di{background:#ffffff0f!important;border:1px solid var(--border)}
+.stage[data-theme="neon"] .di svg{color:var(--accent)}
+.stage[data-theme="neon"] .di:nth-child(odd) svg{color:var(--primary)}
+/* 磷光：图标全单色化剪影 */
+.stage[data-theme="phosphor"] .di{background:transparent!important}
+.stage[data-theme="phosphor"] .di svg{color:var(--primary);filter:drop-shadow(0 0 5px #3df07c66)}
+/* 素纸：图标保留原色但底板白 */
+.stage[data-theme="paper"] .di[data-c]{background:var(--raised)}
+.stage[data-theme="paper"] .di[data-c="1"] svg{color:#2E6BD6}
+.stage[data-theme="paper"] .di[data-c="2"] svg{color:#1B9482}
+.stage[data-theme="paper"] .di[data-c="3"] svg{color:#C8871E}
+.stage[data-theme="paper"] .di[data-c="4"] svg{color:#C8452F}
+.stage[data-theme="paper"] .di[data-c="5"] svg{color:#7B4BD6}
+.stage[data-theme="paper"] .di[data-c="6"] svg{color:#556E8C}
+
+/* --- 主题说明条 --- */
+.stage-foot{
+  display:flex;flex-wrap:wrap;gap:0;background:var(--page-panel);
+  border-top:1px solid var(--page-line-2);
+}
+.sf{flex:1;min-width:150px;padding:14px 18px;border-right:1px solid var(--page-line)}
+.sf:last-child{border-right:none}
+.sf dt{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--page-t3);margin-bottom:5px}
+.sf dd{font-size:12.5px;color:var(--page-t1)}
+
+/* ============================================================
+   色板对比
+   ============================================================ */
+.pal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:16px}
+.pal{background:var(--page-panel);border:1px solid var(--page-line);border-radius:12px;overflow:hidden}
+.pal-h{padding:15px 17px 13px;border-bottom:1px solid var(--page-line)}
+.pal-h b{display:block;font-size:15px;font-weight:620;letter-spacing:-.01em}
+.pal-h span{font-family:var(--mono);font-size:10.5px;color:var(--page-t3);letter-spacing:.06em}
+.pal-h p{font-size:12px;color:var(--page-t2);margin-top:8px;line-height:1.55}
+.pal-strip{display:flex;height:52px}
+.pal-strip i{flex:1;display:block}
+.pal-rows{padding:12px 17px 15px}
+.pr{display:flex;align-items:center;gap:9px;padding:4.5px 0;font-size:11.5px;font-family:var(--mono)}
+.pr i{width:15px;height:15px;border-radius:4px;flex-shrink:0;border:1px solid #ffffff1a}
+.pr .k{color:var(--page-t2);flex:1}
+.pr .v{color:var(--page-t3);font-size:10.5px}
+
+/* ============================================================
+   Token 视觉 & 表格
+   ============================================================ */
+.tok-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+.tok{background:var(--page-panel);border:1px solid var(--page-line);border-radius:12px;padding:18px}
+.tok h4{font-size:12px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--page-t3);margin-bottom:16px;font-weight:500}
+.radii{display:flex;gap:10px;align-items:flex-end}
+.radii div{flex:1;height:52px;background:linear-gradient(160deg,#2a3245,#1c2231);border:1px solid var(--page-line-2);display:grid;place-items:flex-end center;padding-bottom:5px;font-family:var(--mono);font-size:9.5px;color:var(--page-t3)}
+.elevs{display:grid;gap:12px}
+.elevs div{height:34px;border-radius:9px;background:var(--page-panel-2);border:1px solid var(--page-line-2);display:flex;align-items:center;padding:0 12px;font-family:var(--mono);font-size:10.5px;color:var(--page-t2)}
+.motions{display:grid;gap:9px}
+.mo{display:flex;align-items:center;gap:11px;font-family:var(--mono);font-size:10.5px;color:var(--page-t2)}
+.mo .track{flex:1;height:4px;border-radius:99px;background:var(--page-line-2);position:relative;overflow:hidden}
+.mo .track i{position:absolute;inset-block:0;left:0;width:26%;border-radius:99px;background:var(--page-acc);animation:slide 2.4s infinite}
+.mo:nth-child(2) .track i{animation-duration:1.6s;background:#38e1c6}
+.mo:nth-child(3) .track i{animation-duration:1s;background:#e0b264}
+.mo:nth-child(4) .track i{animation-duration:.6s;background:#ff7a8a}
+@keyframes slide{0%{left:-26%}55%{left:100%}100%{left:100%}}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--page-line);vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--page-t3);font-weight:500;background:var(--page-panel)}
+td:first-child{font-family:var(--mono);font-size:11.5px;color:var(--page-acc);white-space:nowrap;width:1%}
+tbody tr:hover{background:#ffffff05}
+td code{font-family:var(--mono);font-size:11.5px;background:var(--page-panel-2);padding:1px 5px;border-radius:4px;color:var(--page-t1);border:1px solid var(--page-line)}
+.tw{border:1px solid var(--page-line);border-radius:12px;overflow:hidden}
+
+/* ============================================================
+   对比度演示
+   ============================================================ */
+.ct-wrap{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.ct{
+  position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--page-line-2);
+  aspect-ratio:16/8;
+  background:
+    radial-gradient(300px 220px at 26% 34%, #fff6d9 0%, transparent 62%),
+    radial-gradient(280px 200px at 74% 68%, #ffd9e8 0%, transparent 60%),
+    linear-gradient(140deg,#f0e4c8,#c8d8e8 50%,#e8d0d8);
+}
+.ct-tag{
+  position:absolute;top:11px;left:11px;z-index:5;font-family:var(--mono);font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;border-radius:5px;
+  background:#000000a6;color:#fff;backdrop-filter:blur(6px);
+}
+.ct-tag.bad{background:#c0392bd9}
+.ct-tag.good{background:#1e7a52d9}
+.ct-dock{
+  position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:4;
+  display:flex;align-items:center;gap:9px;padding:9px 13px;border-radius:16px;
+}
+.ct-dock i{width:30px;height:30px;border-radius:8px;display:block;background:linear-gradient(160deg,#4C8DFF,#2E6BD6)}
+.ct-dock i:nth-child(2){background:linear-gradient(160deg,#38E1C6,#1FA893)}
+.ct-dock i:nth-child(3){background:linear-gradient(160deg,#F5B544,#D68A1E)}
+.ct-dock span{font-size:12.5px;font-weight:560;margin-left:4px}
+/* 左：无保护 —— 白字压浅色壁纸，Lc 极低 */
+.ct.off .ct-dock{background:#ffffff1a}
+.ct.off .ct-dock span{color:#fff}
+.ct.off .ct-lbl{color:#fff}
+/* 右：三层防御生效 —— 极性翻转 + 遮罩 + 材质 */
+.ct.on .ct-dock{
+  background:#ffffffcc;backdrop-filter:blur(24px) saturate(1.3);
+  box-shadow:0 8px 26px -8px #14181c40,inset 0 1px 0 #fff;
+  border:1px solid #14181c14;
+}
+.ct.on .ct-dock span{color:#14181C}
+.ct.on .ct-lbl{color:#14181C;text-shadow:0 1px 2px #ffffffb3}
+.ct-icons{position:absolute;top:34px;left:16px;z-index:4;display:flex;gap:12px}
+.ct-ic{display:flex;flex-direction:column;align-items:center;gap:5px}
+.ct-ic i{width:30px;height:30px;border-radius:8px;background:linear-gradient(160deg,#A77BFF,#7B4BD6);display:block}
+.ct-lbl{font-size:10px;line-height:1.2}
+.ct-note{font-size:12.5px;color:var(--page-t2);margin-top:11px;line-height:1.6}
+.ct-note b{color:var(--page-t1);font-weight:600}
+
+/* --- 层级图 --- */
+.zstack{display:grid;gap:7px;font-family:var(--mono);font-size:12px}
+.zrow{
+  display:grid;grid-template-columns:34px 1fr 88px 76px;align-items:center;gap:14px;
+  padding:11px 15px;border-radius:9px;background:var(--page-panel);border:1px solid var(--page-line);
+}
+.zrow b{color:var(--page-acc);font-size:11px}
+.zrow .nm{color:var(--page-t1);font-size:12.5px}
+.zrow .el,.zrow .px{color:var(--page-t3);font-size:11px;text-align:right}
+.zrow .dep{height:100%;}
+.zrow:nth-child(1){margin-left:0}
+.zrow:nth-child(2){margin-left:12px}
+.zrow:nth-child(3){margin-left:24px}
+.zrow:nth-child(4){margin-left:36px}
+.zrow:nth-child(5){margin-left:48px}
+.zrow:nth-child(6){margin-left:60px}
+.zrow:nth-child(7){margin-left:72px}
+
+/* --- AI 管线 --- */
+.gates{display:grid;gap:9px}
+.gate{
+  display:grid;grid-template-columns:52px 1fr;gap:16px;align-items:start;
+  padding:14px 17px;border-radius:10px;background:var(--page-panel);border:1px solid var(--page-line);
+}
+.gate .g{font-family:var(--mono);font-size:12px;color:var(--page-acc);font-weight:600;padding-top:1px}
+.gate b{display:block;font-size:13.5px;margin-bottom:4px;font-weight:600}
+.gate p{font-size:12.5px;color:var(--page-t2);line-height:1.6}
+.gate.hot{border-color:#5c3a3a;background:linear-gradient(180deg,#1c1416,#12151c)}
+.gate.hot .g{color:#ff8a9a}
+
+.split2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.card{background:var(--page-panel);border:1px solid var(--page-line);border-radius:12px;padding:20px 22px}
+.card h4{font-size:14px;font-weight:620;margin-bottom:10px}
+.card p{font-size:13px;color:var(--page-t2);line-height:1.68}
+.card ul{margin:10px 0 0 18px;font-size:12.5px;color:var(--page-t2);line-height:1.85}
+.card.ok{border-color:#2f5c4a}
+.card.ok h4{color:#4fd6a0}
+.card.no{border-color:#5c3a3a}
+.card.no h4{color:#ff8a9a}
+
+pre{
+  background:var(--page-panel);border:1px solid var(--page-line);border-radius:10px;
+  padding:17px 19px;overflow-x:auto;font-family:var(--mono);font-size:12px;line-height:1.72;
+  color:var(--page-t2);
+}
+pre .c{color:var(--page-t3)}
+pre .k{color:#7db2ff}
+pre .s{color:#4fd6a0}
+pre .n{color:#e0b264}
+
+footer{padding:44px 0 0;color:var(--page-t3);font-size:12.5px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+footer code{font-family:var(--mono);color:var(--page-t2)}
+
+/* ---- 06b 对比度死区 ---- */
+.dz-wrap{margin-top:18px}
+.dz-scale{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.dz-item{text-align:center;font-family:var(--mono);font-size:11px}
+.dz-item i{
+  display:block;height:74px;border-radius:8px;background:var(--c);
+  border:1px solid var(--page-line-2);position:relative;margin-bottom:8px;
+}
+/* 同一底色上同时压纯白与纯黑文字，直观展示"两种都看不清" */
+.dz-item i::before,.dz-item i::after{
+  position:absolute;left:0;right:0;font-size:13px;font-weight:700;
+  font-family:var(--sans);letter-spacing:.02em;
+}
+.dz-item i::before{content:"文字 Aa";top:14px;color:#fff}
+.dz-item i::after {content:"文字 Aa";bottom:14px;color:#000}
+.dz-item b{display:block;color:var(--page-t1);font-weight:600}
+.dz-item span{display:block;color:var(--page-t2);margin-top:2px}
+.dz-item em{
+  display:inline-block;margin-top:6px;padding:2px 8px;border-radius:99px;
+  font-style:normal;font-size:10px;font-weight:700;letter-spacing:.06em;
+}
+.dz-item em.ok {background:rgba(56,225,198,.13);color:#38e1c6}
+.dz-item em.bad{background:rgba(255,122,138,.13);color:#ff7a8a}
+
+.dz-cols{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:26px}
+.dz-col h3{font-size:14px;margin:0 0 8px;color:var(--page-t1)}
+.dz-bar{display:grid;gap:6px;margin-top:11px;font-family:var(--mono);font-size:11.5px}
+.dz-bar span{
+  padding:7px 11px;border-radius:7px;background:var(--page-panel-2);
+  border:1px solid var(--page-line-2);color:var(--page-t2)
+}
+.dz-bar b{color:#ff7a8a}
+.dz-bar b.ok{color:#38e1c6}
+td.ok{color:#38e1c6;font-weight:700;text-align:center}
+td.bad{color:#ff7a8a;font-weight:700;text-align:center}
+.dz-concl{
+  margin-top:22px;padding:15px 17px;border-radius:10px;
+  background:var(--page-panel);border:1px solid var(--page-line);
+  border-left:3px solid #ff7a8a;
+}
+
+@media(max-width:900px){
+  .wrap{padding:0 20px}
+  h1{font-size:36px}
+  .ct-wrap,.split2,.dz-cols{grid-template-columns:1fr}
+  .dz-scale{grid-template-columns:repeat(2,1fr)}
+  .widgets{width:230px}
+  .clock{font-size:38px}
+  .zone{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">DeskKit Design System · v1.0</div>
+    <h1>一个主题包<br>描述<em>整个桌面</em></h1>
+    <p class="lede">
+      壁纸、Dock、小组件、桌面整理不是四份平级配置，而是<strong>同一组设计 Token 的四个投影</strong>。
+      模块无权定义自己的颜色、圆角与材质 —— 一致性因此不靠约定，靠机制。
+      AI 只输出 35 个字段的设计意图，剩下的交给确定性编译器。
+    </p>
+    <div class="meta-row">
+      <span class="chip">theme-schema.json · 30 defs</span>
+      <span class="chip">技术栈无关</span>
+      <span class="chip">APCA 对比度保障</span>
+      <span class="chip">4 套预置主题</span>
+      <span class="chip">AI Intent → Expander → 6 道校验闸</span>
+    </div>
+  </header>
+
+  <!-- ============ 01 架构 ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>三层收敛架构</h2></div>
+    <p class="sec-sub">
+      需求要「AI 自由设计」，但完全自由的 AI 会让四个模块各写各的，产出四个互不相干的东西拼在一起。
+      解法是把 AI 的输出空间从「整个主题」压缩到「设计意图」，机械与数学部分全部交给代码。
+    </p>
+
+    <div class="arch">
+      <div class="arch-row">
+        <div class="arch-box"><b>用户一句话</b><span>"我想要深海一样安静的桌面"</span></div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-row">
+        <div class="arch-box ai"><b>AI → ThemeIntent</b><span>约 35 字段 · 其中 28 个是枚举<br>真正自由的只有 3 个 hex + 2 段提示词</span></div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-row">
+        <div class="arch-box det"><b>Expander 编译器</b><span>OKLCh 色阶展开 · 性格→数值查表<br>小组件布局求解 · 确定性</span></div>
+        <div class="arch-box det"><b>Validator 六道闸</b><span>语法 / Schema / 范围 / 对比度<br>和谐度 / 性能预算</span></div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-row">
+        <div class="arch-box out"><b>theme.json</b><span>完整主题包 + 自动修复记录</span></div>
+      </div>
+      <div class="arch-arrow">↓</div>
+      <div class="arch-row">
+        <div class="arch-box"><b>壁纸层</b><span>image / video<br>shader / web</span></div>
+        <div class="arch-box"><b>桌面整理</b><span>图标显隐<br>分组区</span></div>
+        <div class="arch-box"><b>小组件</b><span>栅格布局<br>样式受限覆盖</span></div>
+        <div class="arch-box"><b>Dock</b><span>底板 / 图标<br>hover / 指示器</span></div>
+      </div>
+      <div class="arch-note">↑ 四层全部只引用同一组 Token，Schema 层面禁止内联字面值</div>
+    </div>
+  </section>
+
+  <!-- ============ 02 实时演示 ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>四套预置主题 · 实时换装</h2></div>
+    <p class="sec-sub">
+      切换主题，观察壁纸、桌面图标、分组区、小组件、Dock 五个部分<strong>同时</strong>改变。
+      整个演示只换了一组 CSS 变量 —— 这正是主题包在真实引擎里的工作方式。
+      注意 Dock 的底板形态、图标处理、指示器样式、hover 动效在四套主题下完全不同，但都由同一份 Schema 描述。
+    </p>
+
+    <div class="switcher" id="sw">
+      <button class="sw" data-t="obsidian" aria-pressed="true">
+        <span class="sw-dots"><i style="background:#4C8DFF"></i><i style="background:#38E1C6"></i><i style="background:#131A24"></i></span>
+        <span>曜岩玻璃<small>obsidian-glass</small></span>
+      </button>
+      <button class="sw" data-t="paper" aria-pressed="false">
+        <span class="sw-dots"><i style="background:#1F2933"></i><i style="background:#C8452F"></i><i style="background:#F5F3EF"></i></span>
+        <span>素纸<small>paper-light</small></span>
+      </button>
+      <button class="sw" data-t="neon" aria-pressed="false">
+        <span class="sw-dots"><i style="background:#FF2E97"></i><i style="background:#00F0FF"></i><i style="background:#170C29"></i></span>
+        <span>霓虹栅格<small>neon-grid</small></span>
+      </button>
+      <button class="sw" data-t="phosphor" aria-pressed="false">
+        <span class="sw-dots"><i style="background:#3DF07C"></i><i style="background:#A8FF60"></i><i style="background:#0A1410"></i></span>
+        <span>磷光终端<small>phosphor-term</small></span>
+      </button>
+    </div>
+
+    <div class="stage" id="stage" data-theme="obsidian">
+      <div class="desktop">
+
+        <!-- z=2 桌面图标 -->
+        <div class="icons">
+          <div class="dicon"><span class="tile" style="background:linear-gradient(160deg,#4C8DFF,#2E6BD6)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></span><span class="lbl">此电脑</span></div>
+          <div class="dicon"><span class="tile" style="background:linear-gradient(160deg,#F5B544,#D68A1E)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span><span class="lbl">工作</span></div>
+          <div class="dicon"><span class="tile" style="background:linear-gradient(160deg,#38E1C6,#1FA893)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M14 3v5h5"/><path d="M19 8v11a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2h7z"/></svg></span><span class="lbl">笔记.md</span></div>
+          <div class="dicon"><span class="tile" style="background:linear-gradient(160deg,#A77BFF,#7B4BD6)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18"/></svg></span><span class="lbl">浏览器</span></div>
+        </div>
+
+        <!-- z=3 分组区 -->
+        <div class="zone">
+          <div class="zone-t">项目文档</div>
+          <div class="zone-grid"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+
+        <!-- z=4 小组件 -->
+        <div class="widgets">
+          <div class="w">
+            <div class="w-cap">Clock</div>
+            <div class="clock">09:41</div>
+            <div class="clock-sub">星期四 · 7 月 31 日</div>
+          </div>
+          <div class="w-split">
+            <div class="w">
+              <div class="w-cap">Weather</div>
+              <div class="temp">22°</div>
+              <div class="clock-sub" style="margin-top:3px">多云</div>
+            </div>
+            <div class="w">
+              <div class="w-cap">System</div>
+              <div class="stat-row"><span>CPU</span><b>34%</b></div>
+              <div class="bar"><i style="width:34%"></i></div>
+              <div class="stat-row"><span>MEM</span><b>61%</b></div>
+              <div class="bar a"><i style="width:61%"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- z=5 Dock -->
+        <div class="dock">
+          <div class="di on" data-c="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18a15 15 0 010-18"/></svg></div>
+          <div class="di on" data-c="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 17l6-5-6-5M12 19h8"/></svg></div>
+          <div class="di" data-c="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></div>
+          <div class="dsep"></div>
+          <div class="di on" data-c="4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg></div>
+          <div class="di" data-c="5"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></div>
+          <div class="di" data-c="6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9v0a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></div>
+        </div>
+
+      </div>
+
+      <dl class="stage-foot" id="foot">
+        <div class="sf"><dt>Material</dt><dd id="f1">acrylic · blur 32 · sat 1.3</dd></div>
+        <div class="sf"><dt>Radius</dt><dd id="f2">round · 8 / 14 / 22</dd></div>
+        <div class="sf"><dt>Dock Plate</dt><dd id="f3">panel · 圆点指示器</dd></div>
+        <div class="sf"><dt>Hover</dt><dd id="f4">magnify 1.45 · spring</dd></div>
+        <div class="sf"><dt>Motion</dt><dd id="f5">standard · 180ms</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============ 03 色板 ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>色板对比</h2></div>
+    <p class="sec-sub">
+      四套主题同时承担三个角色：开箱即用的成品、AI 生成时的 <code style="font-family:var(--mono);font-size:12px">basedOn</code> 风格锚点、few-shot 示例。
+      AI 只需给 2~3 个种子色，全部 50→900 色阶由编译器在 OKLCh 空间按标准明度曲线生成。
+    </p>
+
+    <div class="pal-grid">
+      <div class="pal">
+        <div class="pal-h"><b>曜岩玻璃</b><span>obsidian-glass · dark</span><p>深空冷调玻璃拟态。默认主题，最百搭。克制的蓝加一点青绿提神。</p></div>
+        <div class="pal-strip"><i style="background:#0B0F16"></i><i style="background:#131A24"></i><i style="background:#4C8DFF"></i><i style="background:#38E1C6"></i><i style="background:#E6EDF6"></i></div>
+        <div class="pal-rows">
+          <div class="pr"><i style="background:#0B0F16"></i><span class="k">bg</span><span class="v">#0B0F16</span></div>
+          <div class="pr"><i style="background:#131A24"></i><span class="k">surface @62%</span><span class="v">#131A24</span></div>
+          <div class="pr"><i style="background:#4C8DFF"></i><span class="k">primary</span><span class="v">#4C8DFF</span></div>
+          <div class="pr"><i style="background:#38E1C6"></i><span class="k">accent</span><span class="v">#38E1C6</span></div>
+          <div class="pr"><i style="background:#E6EDF6"></i><span class="k">text.1</span><span class="v">#E6EDF6</span></div>
+          <div class="pr"><i style="background:#9AAABF"></i><span class="k">text.2</span><span class="v">#9AAABF</span></div>
+        </div>
+      </div>
+
+      <div class="pal">
+        <div class="pal-h"><b>素纸</b><span>paper-light · light</span><p>白天工作用。近乎无材质，靠留白和一根朱红提神。反玻璃拟态。</p></div>
+        <div class="pal-strip"><i style="background:#F5F3EF"></i><i style="background:#FFFFFF"></i><i style="background:#1F2933"></i><i style="background:#C8452F"></i><i style="background:#14181C"></i></div>
+        <div class="pal-rows">
+          <div class="pr"><i style="background:#F5F3EF"></i><span class="k">bg</span><span class="v">#F5F3EF</span></div>
+          <div class="pr"><i style="background:#FFFFFF"></i><span class="k">surface @86%</span><span class="v">#FFFFFF</span></div>
+          <div class="pr"><i style="background:#1F2933"></i><span class="k">primary</span><span class="v">#1F2933</span></div>
+          <div class="pr"><i style="background:#C8452F"></i><span class="k">accent</span><span class="v">#C8452F</span></div>
+          <div class="pr"><i style="background:#14181C"></i><span class="k">text.1</span><span class="v">#14181C</span></div>
+          <div class="pr"><i style="background:#5B6670"></i><span class="k">text.2</span><span class="v">#5B6670</span></div>
+        </div>
+      </div>
+
+      <div class="pal">
+        <div class="pal-h"><b>霓虹栅格</b><span>neon-grid · dark</span><p>赛博朋克。发光取代投影，锐角取代圆角。冲击力最强，靠饱和度预算防止做丑。</p></div>
+        <div class="pal-strip"><i style="background:#08040F"></i><i style="background:#170C29"></i><i style="background:#FF2E97"></i><i style="background:#00F0FF"></i><i style="background:#F4E9FF"></i></div>
+        <div class="pal-rows">
+          <div class="pr"><i style="background:#08040F"></i><span class="k">bg</span><span class="v">#08040F</span></div>
+          <div class="pr"><i style="background:#170C29"></i><span class="k">surface @55%</span><span class="v">#170C29</span></div>
+          <div class="pr"><i style="background:#FF2E97"></i><span class="k">primary</span><span class="v">#FF2E97</span></div>
+          <div class="pr"><i style="background:#00F0FF"></i><span class="k">accent</span><span class="v">#00F0FF</span></div>
+          <div class="pr"><i style="background:#F4E9FF"></i><span class="k">text.1</span><span class="v">#F4E9FF</span></div>
+          <div class="pr"><i style="background:#B79BDD"></i><span class="k">text.2</span><span class="v">#B79BDD</span></div>
+        </div>
+      </div>
+
+      <div class="pal">
+        <div class="pal-h"><b>磷光终端</b><span>phosphor-term · dark</span><p>CRT 绿色单色终端。全等宽、零圆角、扫描线。极端风格，对折腾党杀伤力最大。</p></div>
+        <div class="pal-strip"><i style="background:#050A07"></i><i style="background:#0A1410"></i><i style="background:#3DF07C"></i><i style="background:#A8FF60"></i><i style="background:#C9FFD9"></i></div>
+        <div class="pal-rows">
+          <div class="pr"><i style="background:#050A07"></i><span class="k">bg</span><span class="v">#050A07</span></div>
+          <div class="pr"><i style="background:#0A1410"></i><span class="k">surface @90%</span><span class="v">#0A1410</span></div>
+          <div class="pr"><i style="background:#3DF07C"></i><span class="k">primary</span><span class="v">#3DF07C</span></div>
+          <div class="pr"><i style="background:#A8FF60"></i><span class="k">accent</span><span class="v">#A8FF60</span></div>
+          <div class="pr"><i style="background:#C9FFD9"></i><span class="k">text.1</span><span class="v">#C9FFD9</span></div>
+          <div class="pr"><i style="background:#63B37F"></i><span class="k">text.2</span><span class="v">#63B37F</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 04 Token ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>Token 层</h2></div>
+    <p class="sec-sub">
+      模块层禁止内联数值 —— Schema 中 Dock 的 <code style="font-family:var(--mono);font-size:12px">surface.radius</code> 字段类型是
+      <code style="font-family:var(--mono);font-size:12px">string</code>（Token key）而非 number。从类型系统层面就写不出「Dock 圆角 8、小组件圆角 12」这种事。
+    </p>
+
+    <div class="tok-grid">
+      <div class="tok">
+        <h4>Radius 阶梯</h4>
+        <div class="radii">
+          <div style="border-radius:0">none</div>
+          <div style="border-radius:8px">sm 8</div>
+          <div style="border-radius:14px">md 14</div>
+          <div style="border-radius:22px">lg 22</div>
+        </div>
+        <p style="font-size:11.5px;color:var(--page-t3);margin-top:12px;line-height:1.55">实际使用的不同圆角值 ≤ 3，且 r(dock) ≥ r(widget) ≥ r(zone)</p>
+      </div>
+
+      <div class="tok">
+        <h4>Elevation 纵深</h4>
+        <div class="elevs">
+          <div style="box-shadow:none">level0 · 图标</div>
+          <div style="box-shadow:0 2px 8px -3px #000c">level1 · 分组区</div>
+          <div style="box-shadow:0 6px 18px -5px #000d">level2 · 小组件</div>
+          <div style="box-shadow:0 10px 30px -8px #000e,inset 0 1px 0 #ffffff1a">level3 · Dock</div>
+        </div>
+        <p style="font-size:11.5px;color:var(--page-t3);margin-top:12px;line-height:1.55">单光源：所有阴影共用同一方向比与色相</p>
+      </div>
+
+      <div class="tok">
+        <h4>Motion 时长</h4>
+        <div class="motions">
+          <div class="mo"><span style="width:56px">ambient</span><span class="track"><i></i></span><span>1200</span></div>
+          <div class="mo"><span style="width:56px">slow</span><span class="track"><i></i></span><span>420</span></div>
+          <div class="mo"><span style="width:56px">normal</span><span class="track"><i></i></span><span>260</span></div>
+          <div class="mo"><span style="width:56px">fast</span><span class="track"><i></i></span><span>160</span></div>
+        </div>
+        <p style="font-size:11.5px;color:var(--page-t3);margin-top:12px;line-height:1.55">Dock hover 与小组件 hover 共用 fast，节奏一致</p>
+      </div>
+    </div>
+
+    <h3>颜色原语 —— AI 能安全填空的关键</h3>
+    <div class="tw">
+      <table>
+        <thead><tr><th>原语</th><th>形态</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>字面值</td><td><code>"#4C8DFF"</code></td><td>固定色。也支持 OKLCh 对象形态。</td></tr>
+          <tr><td>$ref</td><td><code>{"$ref":"palette.accent.500","alpha":0.4}</code></td><td>引用其它 Token，可覆盖 alpha 或做 OKLCh 偏移。</td></tr>
+          <tr><td>$derive</td><td><code>{"$derive":"wallpaper.vibrant","fallback":"#4C8DFF"}</code></td><td>从壁纸提取。支持 dominant / vibrant / muted / averageUnderDock 等，带 clamp 防止壁纸过暗过饱和把 UI 搞崩。</td></tr>
+          <tr><td>$contrast</td><td><code>{"$contrast":{"against":"auto:dock","target":75}}</code></td><td><strong>核心原语。</strong>引擎保持色相调明度，直到 APCA Lc 达标。against 可写 <code>auto:dock</code> —— 运行时实时采样 Dock 背后的壁纸区域。这让「任意壁纸下文字都可读」成为类型层面的保证，而不是设计时的祈祷。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 05 对比度 ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>对比度保障 · 三层防御</h2></div>
+    <p class="sec-sub">
+      壁纸可以是任意图片，这是整个设计系统最脆弱的地方。左边是没有保护的样子 —— 白字压在浅色壁纸上，
+      这就是绝大多数桌面美化方案换张壁纸就崩的原因。右边是三层防御生效后的结果。
+    </p>
+
+    <div class="ct-wrap">
+      <div class="ct off">
+        <span class="ct-tag bad">保护关闭 · APCA Lc ≈ 18</span>
+        <div class="ct-icons">
+          <div class="ct-ic"><i></i><span class="ct-lbl">项目.docx</span></div>
+          <div class="ct-ic"><i></i><span class="ct-lbl">归档</span></div>
+        </div>
+        <div class="ct-dock"><i></i><i></i><i></i><span>Finder</span></div>
+      </div>
+      <div class="ct on">
+        <span class="ct-tag good">三层防御 · APCA Lc ≈ 92</span>
+        <div class="ct-icons">
+          <div class="ct-ic"><i></i><span class="ct-lbl">项目.docx</span></div>
+          <div class="ct-ic"><i></i><span class="ct-lbl">归档</span></div>
+        </div>
+        <div class="ct-dock"><i></i><i></i><i></i><span>Finder</span></div>
+      </div>
+    </div>
+    <p class="ct-note">
+      <b>第一层｜源头治理：</b>壁纸提示词强制含构图约束（底部 15% 低对比、避免高频细节）。程序化壁纸天然满足，因为色值直接取自 palette。<br>
+      <b>第二层｜极性自适应：</b>实时采样元素背后壁纸的 OKLCh 平均明度，L &gt; 0.55 切深色前景，L &lt; 0.55 切浅色前景。迟滞 0.06 防止动态壁纸下反复横跳，作用域是 per-element —— Dock 和小组件可以各自处于不同极性。<br>
+      <b>第三层｜自适应遮罩：</b>仍不达标时按代价从低到高逐级施加：tintOpacity +0.05/步 → 加大模糊 → 注入局部 scrim（≤0.55）→ 文字描边 → 强制极性翻转。
+      <b>这条链路永不失败，只逐级降级。</b>每次修正写入 <code style="font-family:var(--mono);font-size:11.5px">meta.generator.repairs</code>，设置界面可展示「本主题自动修正了 3 处可读性问题」。
+    </p>
+
+    <h3>动态壁纸下的稳定性</h3>
+    <div class="tw">
+      <table>
+        <thead><tr><th>措施</th><th>取值</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>采样降频</td><td><code>sampleIntervalMs: 400</code></td><td>先降采样到 32×32 再算平均明度，CPU 开销可忽略</td></tr>
+          <tr><td>迟滞</td><td><code>hysteresis: 0.06</code></td><td>亮度变化超阈值才响应，防止视频壁纸下遮罩闪烁</td></tr>
+          <tr><td>过渡插值</td><td><code>transitionMs: 600</code></td><td>遮罩强度平滑变化，绝不跳变</td></tr>
+          <tr><td>静态优化</td><td><code>staticSampleOnce</code></td><td>静态壁纸只采样一次，零常驻开销</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>层级与视觉纵深</h3>
+    <div class="zstack">
+      <div class="zrow"><b>z0</b><span class="nm">wallpaper　壁纸</span><span class="el">—</span><span class="px">视差 0.00</span></div>
+      <div class="zrow"><b>z1</b><span class="nm">scrim　自适应遮罩</span><span class="el">—</span><span class="px">视差 0.00</span></div>
+      <div class="zrow"><b>z2</b><span class="nm">desktopIcons　桌面图标</span><span class="el">level0</span><span class="px">视差 0.01</span></div>
+      <div class="zrow"><b>z3</b><span class="nm">zones　分组区</span><span class="el">level1</span><span class="px">视差 0.02</span></div>
+      <div class="zrow"><b>z4</b><span class="nm">widgets　小组件</span><span class="el">level2</span><span class="px">视差 0.04</span></div>
+      <div class="zrow"><b>z5</b><span class="nm">dock　Dock 栏</span><span class="el">level3</span><span class="px">视差 0.06</span></div>
+      <div class="zrow"><b>z6</b><span class="nm">overlay　弹出层</span><span class="el">level4</span><span class="px">—</span></div>
+    </div>
+    <p class="ct-note">纵深三要素同步递增：<b>阴影强度 ↑ · 边缘高光 ↑ · 视差位移 ↑</b>。分组区刻意比小组件"沉" —— 它承载图标，应该像桌面上的托盘而非浮空卡片。</p>
+  </section>
+
+  <!-- ============ 06 一致性规则 ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>跨模块一致性 · 十二条硬规则</h2></div>
+    <p class="sec-sub">由加载器在渲染前强制校验。违反即拒绝加载或自动修正 —— 不是文档建议，是运行时约束。</p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>#</th><th>规则</th><th>强制方式</th></tr></thead>
+        <tbody>
+          <tr><td>R1</td><td>模块层禁止内联字面色值 / 圆角 / 模糊值，只能写 Token key 或 <code>$ref</code></td><td>Schema 中这些字段类型为 string 而非 number</td></tr>
+          <tr><td>R2</td><td>所有面板材质派生自 <code>tokens.material</code> 具名条目，不允许就地定义</td><td>同上</td></tr>
+          <tr><td>R3</td><td>不同圆角值 ≤ 3；且 r(dock) ≥ r(widget) ≥ r(zone) 或三者全等</td><td>校验器统计后拒绝</td></tr>
+          <tr><td>R4</td><td>单光源：所有 elevation 阴影共用同一方向比与阴影色相</td><td>校验器检查方向一致性</td></tr>
+          <tr><td>R5</td><td>所有发丝边取自同一材质 border，颜色随极性自动翻转</td><td><code>$contrast</code> 原语求值</td></tr>
+          <tr><td>R6</td><td>前景文字对实际背景（含壁纸）APCA Lc ≥ 75 / 60 / 45</td><td>运行时 adaptiveScrim 保障</td></tr>
+          <tr><td>R7</td><td>跨模块同类动作共用同一 duration token</td><td><code>motion.energy</code> 单值统一缩放</td></tr>
+          <tr><td>R8</td><td>视差系数随 z 层单调递增，最大位移 ≤ 12px</td><td>校验器钳制</td></tr>
+          <tr><td>R9</td><td>所有间距落在 <code>spacing.scale</code> 白名单内（4 的倍数）</td><td>校验器拒绝白名单外取值</td></tr>
+          <tr><td>R10</td><td>最多 2 个字体族 + 1 个等宽；字号取自 typography 阶梯</td><td>校验器统计</td></tr>
+          <tr><td>R11</td><td>面板<b>合成后</b>明度不得落进对比度死区 L ∈ [0.58, 0.82]</td><td>按最坏壁纸推演，越界则抬 tintOpacity</td></tr>
+          <tr><td>R12</td><td>承载文字的填充底色，其承文上限必须 ≥ 该文字角色门槛</td><td>校验器算 ceiling，不足则要求补 .700 深档</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 06b 对比度死区 ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06b</span><h2>对比度死区 · 实测结论</h2></div>
+    <p class="sec-sub">
+      APCA 实测扫描发现的反直觉约束，直接决定调色板能怎么取值。
+      「承文上限」= 纯白字与纯黑字在该底色上能达到的 Lc 的较大者 —— 也就是这个底色<b>理论最好</b>的文字对比度。
+    </p>
+
+    <div class="dz-wrap">
+      <div class="dz-scale">
+        <div class="dz-item" style="--c:#696969"><i></i><b>L 0.52</b><span>上限 82.7</span><em class="ok">安全</em></div>
+        <div class="dz-item" style="--c:#808080"><i></i><b>L 0.60</b><span>上限 72.4</span><em class="bad">死区</em></div>
+        <div class="dz-item" style="--c:#A4A4A4"><i></i><b>L 0.72</b><span>上限 55.0</span><em class="bad">最劣</em></div>
+        <div class="dz-item" style="--c:#BEBEBE"><i></i><b>L 0.80</b><span>上限 68.8</span><em class="bad">死区</em></div>
+        <div class="dz-item" style="--c:#CACACA"><i></i><b>L 0.84</b><span>上限 75.4</span><em class="ok">安全</em></div>
+      </div>
+      <p class="ct-note">
+        每格上半是底色，上面同时压了纯白与纯黑两种文字 —— 中间三格<b>两种都看不清</b>，这就是死区。
+        最劣点 L=0.72 上限仅 <b>Lc 55</b>，离正文门槛 75 差得很远。
+      </p>
+    </div>
+
+    <div class="dz-cols">
+      <div class="dz-col">
+        <h3>推论一 · 面板层（R11）</h3>
+        <p class="ct-note">
+          玻璃面板在亮壁纸上合成后会往中间调漂。曜岩玻璃 <code>tintOpacity=0.62</code> 在纯白壁纸下合成为
+          <code>#6D7177</code>（L=0.54），<b>刚好压在死区下沿外，余量仅 0.04</b>。
+          若降到 0.50 则合成 L=0.63 落入死区 —— 此时<b>再怎么调文字色都无效</b>，必须回到面板层加不透明度。
+        </p>
+        <div class="dz-bar">
+          <span>tintOpacity 0.62 → 白字 Lc <b>68.1</b></span>
+          <span>tintOpacity 0.70 → 白字 Lc <b class="ok">75.9</b></span>
+        </div>
+      </div>
+      <div class="dz-col">
+        <h3>推论二 · 调色板层（R12）</h3>
+        <p class="ct-note">中等明度的高饱和品牌色普遍落在死区里：</p>
+        <div class="tw">
+          <table>
+            <thead><tr><th>角色色</th><th>L</th><th>上限</th><th>正文75</th><th>大字60</th></tr></thead>
+            <tbody>
+              <tr><td><code>#4C8DFF</code> 曜岩 primary</td><td>0.66</td><td>64.2</td><td class="bad">✕</td><td class="ok">✓</td></tr>
+              <tr><td><code>#FF2E97</code> 霓虹 primary</td><td>0.67</td><td>65.6</td><td class="bad">✕</td><td class="ok">✓</td></tr>
+              <tr><td><code>#7C9CBF</code> 曜岩 secondary</td><td>0.68</td><td>59.9</td><td class="bad">✕</td><td class="bad">✕</td></tr>
+              <tr><td><code>#38E1C6</code> 曜岩 accent</td><td>0.82</td><td>75.6</td><td>⚠ 勉强</td><td class="ok">✓</td></tr>
+              <tr><td><code>#00F0FF</code> 霓虹 accent</td><td>0.87</td><td>84.7</td><td class="ok">✓</td><td class="ok">✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <p class="ct-note dz-concl">
+      <b>所以「用 primary 做填充按钮底、上面放正文字号文字」在多数主题里根本不可能达标。</b>
+      解法不是改文字色，而是填充承文场景改用 <code>primary.700</code>（曜岩 <code>#1C5BC9</code>，上限 85.4），
+      或把标签降级为粗体大字（门槛 60）。<br>
+      另注意死区是<b>一条带</b>而非阈值：<code>accent.600 #00947C</code>（L=0.58）反而又掉回死区，
+      <code>accent.700 #007B65</code>（L=0.50）才重新达标 —— 生成色阶必须逐档校验，
+      不能假设「越深越安全」。
+    </p>
+  </section>
+
+  <!-- ============ 07 AI ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">07</span><h2>AI 设计接口</h2></div>
+    <p class="sec-sub">
+      需求第 6 条能否落地的关键。核心判断：<strong>AI 不应该直接输出完整 theme.json</strong>。
+    </p>
+
+    <div class="split2" style="margin-bottom:32px">
+      <div class="card no">
+        <h4>✗ 让 AI 直写完整 theme.json</h4>
+        <p>看起来最直接，但不可行：</p>
+        <ul>
+          <li><b>规模</b> —— 200+ 字段，字段缺失、枚举越界、括号不闭合的概率高到无法产品化</li>
+          <li><b>数学</b> —— 色阶需在 OKLCh 空间均匀分布，对比度需算 APCA。让概率模型做确定性计算，结果肉眼可见地不均匀</li>
+          <li><b>重复</b> —— 大部分字段是从少数决策机械派生的，逐个填既费 token 又在派生环节引入不一致</li>
+        </ul>
+      </div>
+      <div class="card ok">
+        <h4>✓ AI 输出 ThemeIntent，编译器展开</h4>
+        <p>约 35 字段的设计意图对象：</p>
+        <ul>
+          <li>其中 <b>28 个是枚举</b>，可用受约束解码强制合法</li>
+          <li>真正自由的只有 <b>3 个 hex 色 + 2 段提示词文本</b></li>
+          <li><code>basedOn</code> 必填，把搜索空间从「无限」压到「四个已知良好设计的邻域」</li>
+          <li>保留 <code>overrides</code> 逃生口（JSON Pointer），但仍须过完整校验管线</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>职责边界 —— AI 决定"像什么"，引擎决定"是多少"</h3>
+    <div class="tw" style="margin-bottom:34px">
+      <table>
+        <thead><tr><th>环节</th><th style="width:90px">AI</th><th style="width:90px">引擎</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>配色种子</td><td>✅</td><td></td><td>审美判断</td></tr>
+          <tr><td>色阶展开</td><td></td><td>✅</td><td>OKLCh 数学</td></tr>
+          <tr><td>材质/形状/动效性格</td><td>✅</td><td></td><td>审美判断</td></tr>
+          <tr><td>材质/形状/动效数值</td><td></td><td>✅</td><td>性格 → 数值查表</td></tr>
+          <tr><td>壁纸提示词</td><td>✅</td><td></td><td>创意生成</td></tr>
+          <tr><td>壁纸像素</td><td></td><td>图像模型</td><td>非 LLM 职责</td></tr>
+          <tr><td>Shader 代码</td><td></td><td>✅ 内置库</td><td>编译 / 性能 / 安全不可控</td></tr>
+          <tr><td>小组件集合与分布倾向</td><td>✅</td><td></td><td>审美判断</td></tr>
+          <tr><td>小组件精确坐标</td><td></td><td>✅ 布局求解器</td><td>让 AI 摆栅格坐标必然重叠</td></tr>
+          <tr><td>分区语义命名</td><td>✅</td><td></td><td>需要语义理解</td></tr>
+          <tr><td>文件实际移动</td><td></td><td>✅ + dryRun</td><td>破坏性操作</td></tr>
+          <tr><td><b>对比度保障</b></td><td>❌</td><td>✅</td><td>硬约束，不可协商</td></tr>
+          <tr><td><b>性能预算</b></td><td>❌</td><td>✅</td><td>硬约束</td></tr>
+          <tr><td><b>z 序 / 边界钳制</b></td><td>❌</td><td>✅</td><td>硬约束</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>提示词架构 —— 前三段固定可缓存</h3>
+    <pre><span class="c">┌─ Block 1  系统契约（固定，可缓存）</span>
+<span class="c">│</span>  • 角色：桌面主题设计师
+<span class="c">│</span>  • ThemeIntent Schema 精简版（<span class="k">枚举值全列出</span>）
+<span class="c">│</span>  • 硬要求：只输出纯 JSON，无 markdown 围栏，无解释文字
+<span class="c">│</span>  • <span class="k">basedOn 必填</span>，必须从 4 个锚点中选
+<span class="c">│</span>
+<span class="c">├─ Block 2  设计法则（固定，可缓存）</span>
+<span class="c">│</span>  • 暗色主题 surface 明度 <span class="n">L ∈ [0.10, 0.22]</span>；浅色 <span class="n">L ∈ [0.92, 1.0]</span>
+<span class="c">│</span>  • accent 与 primary 色相差 <span class="n">Δh ≥ 60°</span> 或 <span class="n">= 0°</span>（同色系）
+<span class="c">│</span>    <span class="c">└ 避开 20°~50° 脏区间 —— 那是配色显廉价的主因</span>
+<span class="c">│</span>  • 强调色全屏面积 <span class="n">&lt; 5%</span>
+<span class="c">│</span>  • 中性色必须带 primary 微量色偏（<span class="n">C ≈ 0.01~0.02</span>），纯灰显脏
+<span class="c">│</span>  • <span class="s">材质 + 形状 + 动效必须同性格</span>：玻璃配圆角配弹性，
+<span class="c">│</span>    平面配锐角配线性。<span class="c">混搭是 AI 生成主题最典型的失败模式</span>
+<span class="c">│</span>  • 壁纸提示词必须含构图约束：底部 15% 低对比、避免高频细节
+<span class="c">│</span>
+<span class="c">├─ Block 3  Few-shot（固定，可缓存）</span>
+<span class="c">│</span>  • 3 组「用户描述 → ThemeIntent JSON」样例
+<span class="c">│</span>  • 取自预置主题，覆盖 暗玻璃 / 浅极简 / 高饱和 三个方向
+<span class="c">│</span>
+<span class="c">└─ Block 4  用户输入（变化）</span>
+   • 用户一句话
+   • 可选上下文：当前壁纸取色摘要 · 屏幕分辨率 · 已装字体 · 历史偏好</pre>
+
+    <h3>校验与兜底 · 六道闸</h3>
+    <div class="gates">
+      <div class="gate"><span class="g">G1</span><div><b>语法闸</b><p>JSON 解析与自动修复：剥 markdown 围栏、补引号、去尾逗号。失败则重试。</p></div></div>
+      <div class="gate"><span class="g">G2</span><div><b>Schema 闸</b><p>缺失字段从 <code>basedOn</code> 预置主题继承 · 未知字段丢弃并记录 · 枚举越界取最近合法值。</p></div></div>
+      <div class="gate"><span class="g">G3</span><div><b>范围闸</b><p>数值钳制：blur ∈ [0,64] · iconSize ∈ [24,96] · opacity ∈ [0,1] · duration ∈ [60,2000] · magnifyScale ∈ [1,2.5] · widgets ≤ 8。</p></div></div>
+      <div class="gate hot"><span class="g">G4</span><div><b>对比度闸 · 核心</b><p>对全部前景/背景组合算 APCA。不达标时五步降级：① 保色相调明度（±0.02，24 步）② 降色度重试 ③ 提高 tintOpacity（≤+0.3）④ 注入 scrim（≤0.55）⑤ 强制极性翻转。<b>五步内必然收敛，永不失败。</b></p></div></div>
+      <div class="gate"><span class="g">G5</span><div><b>和谐闸</b><p>色相脏区检测（Δh ∈ [20°,50°] 且双方 C &gt; 0.1 → 把 accent 推到 Δh=60° 或归零）· 暗色 surface 色度 C ≤ 0.04 · 高饱和色覆盖 ≤ 12% 面积 · 圆角种类 ≤ 3 · 字体族 ≤ 2。</p></div></div>
+      <div class="gate"><span class="g">G6</span><div><b>性能闸</b><p>模糊预算 Σ(面板面积 × blurRadius) ≤ B · 视频 ≤ 1 路 4K30 或 2 路 1080p30 · WebView 小组件 ≤ 3。超预算按固定顺序降级：ambientAnimation 关 → parallax 关 → blur 减半 → shader quality 降级 → fps 30→20。</p></div></div>
+    </div>
+
+    <p class="ct-note" style="margin-top:20px">
+      <b>重试策略：</b>校验失败把具体错误回灌给模型重试，最多 2 次。仍失败则回退到 <code style="font-family:var(--mono);font-size:11.5px">basedOn</code> 指向的预置主题，只应用能解析出的颜色偏好。<b>永不向用户报错。</b>
+      所有自动修正记入 <code style="font-family:var(--mono);font-size:11.5px">meta.generator.repairs</code>，既保证可用，又保持透明。
+    </p>
+  </section>
+
+  <footer>
+    <span>DeskKit Design System v1.0 · GStack 设计顾问</span>
+    <span><code>theme-schema.json</code> · <code>theme-intent-schema.json</code> · <code>DESIGN.md</code></span>
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  var stage = document.getElementById('stage');
+  var btns  = document.querySelectorAll('#sw .sw');
+  var info = {
+    obsidian: ['acrylic · blur 32 · sat 1.3','round · 8 / 14 / 22','panel 统一底板 · 圆点','magnify 1.45 · 波及 2 邻居','standard · 180ms spring'],
+    paper:    ['frosted · blur 12 · 纸纹','round · 6 / 10 / 14','separate 分离底板 · 下划线','lift 9px · 无缩放','calm · 230ms easeOut'],
+    neon:     ['glass · blur 20 · sat 1.6 · glow','sharp · 4 / 6 / 10','panel + 霓虹描边 · 环形','glow 光晕 · scale 1.22','playful · 140ms overshoot'],
+    phosphor: ['solid · 扫描线 · 无模糊','sharp · 全 0 · 切角','none 无底板 · 方括号 · bar','brightness + drop-shadow','standard · 100ms linear']
+  };
+  var ids = ['f1','f2','f3','f4','f5'];
+
+  btns.forEach(function(b){
+    b.addEventListener('click', function(){
+      var t = b.dataset.t;
+      btns.forEach(function(x){ x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+      stage.dataset.theme = t;
+      info[t].forEach(function(v,i){ document.getElementById(ids[i]).textContent = v; });
+    });
+  });
+
+  // 时钟走字，让演示活起来
+  function tick(){
+    var d = new Date();
+    var el = document.querySelector('.clock');
+    if(el) el.textContent = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    var sub = document.querySelector('.clock-sub');
+    if(sub) sub.textContent = '星期' + '日一二三四五六'[d.getDay()] + ' · ' + (d.getMonth()+1) + ' 月 ' + d.getDate() + ' 日';
+  }
+  tick(); setInterval(tick, 10000);
+})();
+</script>
+
+</body>
+</html>

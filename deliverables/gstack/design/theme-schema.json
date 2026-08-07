@@ -1,0 +1,1329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deskkit.local/schemas/theme-pack/1.0.0/theme.schema.json",
+  "title": "DeskKit Theme Pack",
+  "description": "一个主题包完整描述整个桌面的视觉：设计 Token、壁纸、Dock、小组件、桌面整理。技术栈无关：任何渲染器（WPF / Electron / Tauri）只要能消费本 Schema 即可实现。",
+  "type": "object",
+  "required": ["formatVersion", "id", "meta", "tokens"],
+  "additionalProperties": false,
+
+  "properties": {
+    "$schema": { "type": "string" },
+
+    "formatVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "主题包格式版本。引擎按此判断兼容性；major 变更不向后兼容。"
+    },
+
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$",
+      "description": "全局唯一 ID，反向域名风格。例：io.deskkit.aurora-glass"
+    },
+
+    "extends": {
+      "type": "string",
+      "description": "继承的基础主题 ID。本包字段将深合并覆盖基础主题。AI 生成时强烈建议 extends 一个预置主题，只输出差异，从而大幅降低出错率。"
+    },
+
+    "meta": { "$ref": "#/$defs/Meta" },
+    "capabilities": { "$ref": "#/$defs/Capabilities" },
+    "consistency": { "$ref": "#/$defs/ConsistencyContract" },
+    "tokens": { "$ref": "#/$defs/Tokens" },
+    "wallpaper": { "$ref": "#/$defs/WallpaperLayerSet" },
+    "dock": { "$ref": "#/$defs/Dock" },
+    "widgets": { "$ref": "#/$defs/WidgetLayer" },
+    "desktop": { "$ref": "#/$defs/DesktopLayer" }
+  },
+
+  "$defs": {
+
+    "//---------- 基础类型 ----------//": {},
+
+    "HexColor": {
+      "type": "string",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "description": "#RRGGBB 或 #RRGGBBAA"
+    },
+
+    "OklchColor": {
+      "type": "object",
+      "description": "OKLCh 色彩空间。引擎内部所有颜色运算（提取、混合、对比度修复）必须在 OKLCh 下进行，避免 sRGB 插值发灰。",
+      "required": ["l", "c", "h"],
+      "additionalProperties": false,
+      "properties": {
+        "l": { "type": "number", "minimum": 0, "maximum": 1, "description": "感知亮度" },
+        "c": { "type": "number", "minimum": 0, "maximum": 0.4, "description": "色度" },
+        "h": { "type": "number", "minimum": 0, "maximum": 360, "description": "色相角" },
+        "alpha": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 }
+      }
+    },
+
+    "ColorRef": {
+      "type": "object",
+      "description": "引用另一个 Token。路径以 tokens 为根。例：{\"$ref\":\"palette.accent.500\"}",
+      "required": ["$ref"],
+      "additionalProperties": false,
+      "properties": {
+        "$ref": { "type": "string", "pattern": "^[a-zA-Z0-9_.\\[\\]-]+$" },
+        "alpha": { "type": "number", "minimum": 0, "maximum": 1, "description": "覆盖引用色的 alpha" },
+        "adjust": { "$ref": "#/$defs/ColorAdjust" }
+      }
+    },
+
+    "ColorAdjust": {
+      "type": "object",
+      "description": "在 OKLCh 空间对基色做相对偏移。",
+      "additionalProperties": false,
+      "properties": {
+        "l": { "type": "number", "minimum": -1, "maximum": 1 },
+        "c": { "type": "number", "minimum": -0.4, "maximum": 0.4 },
+        "h": { "type": "number", "minimum": -360, "maximum": 360 }
+      }
+    },
+
+    "ColorDerive": {
+      "type": "object",
+      "description": "从壁纸动态提取。引擎在壁纸加载/切换时求值，动态壁纸按 colorExtraction.updatePolicy 求值。",
+      "required": ["$derive"],
+      "additionalProperties": false,
+      "properties": {
+        "$derive": {
+          "type": "string",
+          "enum": [
+            "wallpaper.dominant",
+            "wallpaper.vibrant",
+            "wallpaper.vibrantLight",
+            "wallpaper.vibrantDark",
+            "wallpaper.muted",
+            "wallpaper.mutedLight",
+            "wallpaper.mutedDark",
+            "wallpaper.averageEdgeTop",
+            "wallpaper.averageEdgeBottom",
+            "wallpaper.averageUnderDock",
+            "system.accent"
+          ]
+        },
+        "adjust": { "$ref": "#/$defs/ColorAdjust" },
+        "fallback": { "$ref": "#/$defs/HexColor", "description": "提取失败或不满足约束时使用。必填强烈建议。" },
+        "clamp": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "把提取结果钳制到合理区间，防止壁纸过暗/过饱和导致 UI 崩坏。",
+          "properties": {
+            "lMin": { "type": "number", "default": 0.15 },
+            "lMax": { "type": "number", "default": 0.9 },
+            "cMin": { "type": "number", "default": 0 },
+            "cMax": { "type": "number", "default": 0.2 }
+          }
+        }
+      }
+    },
+
+    "ColorContrast": {
+      "type": "object",
+      "description": "自动对比色。引擎求值：在保持色相的前提下调整明度，直到相对 against 达到 target 对比度。这是保证「任意壁纸下文字可读」的核心原语。",
+      "required": ["$contrast"],
+      "additionalProperties": false,
+      "properties": {
+        "$contrast": {
+          "type": "object",
+          "required": ["against"],
+          "additionalProperties": false,
+          "properties": {
+            "against": { "type": "string", "description": "背景 Token 路径，或 'auto:dock' / 'auto:widget' / 'auto:iconLabel'（运行时实时采样壁纸对应区域）" },
+            "target": { "type": "number", "default": 75, "description": "APCA Lc 目标值。body=75, large=60, ui=45" },
+            "seed": { "$ref": "#/$defs/HexColor", "description": "起始色，引擎在其色相上调明度。缺省则输出中性黑/白。" },
+            "prefer": { "type": "string", "enum": ["auto", "light", "dark"], "default": "auto" },
+            "maxChromaLoss": { "type": "number", "default": 0.06, "description": "允许为达标损失的最大色度，超出则改走 scrim 方案。" }
+          }
+        }
+      }
+    },
+
+    "ColorValue": {
+      "description": "统一颜色值。所有涉及颜色的字段都用它，从而使「固定色 / 壁纸派生色 / 自动对比色」可以互换填写 —— 这是 AI 能安全填空的关键。",
+      "oneOf": [
+        { "$ref": "#/$defs/HexColor" },
+        { "$ref": "#/$defs/OklchColor" },
+        { "$ref": "#/$defs/ColorRef" },
+        { "$ref": "#/$defs/ColorDerive" },
+        { "$ref": "#/$defs/ColorContrast" }
+      ]
+    },
+
+    "ColorRamp": {
+      "type": "object",
+      "description": "色阶。至少提供 500 作为基色，其余档位缺失时由引擎在 OKLCh 空间按标准明度曲线自动生成。",
+      "required": ["500"],
+      "additionalProperties": false,
+      "properties": {
+        "50":  { "$ref": "#/$defs/ColorValue" },
+        "100": { "$ref": "#/$defs/ColorValue" },
+        "200": { "$ref": "#/$defs/ColorValue" },
+        "300": { "$ref": "#/$defs/ColorValue" },
+        "400": { "$ref": "#/$defs/ColorValue" },
+        "500": { "$ref": "#/$defs/ColorValue" },
+        "600": { "$ref": "#/$defs/ColorValue" },
+        "700": { "$ref": "#/$defs/ColorValue" },
+        "800": { "$ref": "#/$defs/ColorValue" },
+        "900": { "$ref": "#/$defs/ColorValue" }
+      }
+    },
+
+    "Px": { "type": "number", "minimum": 0, "description": "逻辑像素（DIP）。引擎按显示器 DPI 缩放。" },
+
+    "Inset": {
+      "oneOf": [
+        { "$ref": "#/$defs/Px" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "top": { "$ref": "#/$defs/Px" },
+            "right": { "$ref": "#/$defs/Px" },
+            "bottom": { "$ref": "#/$defs/Px" },
+            "left": { "$ref": "#/$defs/Px" }
+          }
+        }
+      ]
+    },
+
+    "Shadow": {
+      "type": "object",
+      "required": ["y", "blur", "color"],
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number", "default": 0 },
+        "y": { "type": "number" },
+        "blur": { "type": "number", "minimum": 0 },
+        "spread": { "type": "number", "default": 0 },
+        "color": { "$ref": "#/$defs/ColorValue" },
+        "inset": { "type": "boolean", "default": false }
+      }
+    },
+
+    "Easing": {
+      "oneOf": [
+        { "type": "string", "enum": ["linear", "ease", "easeIn", "easeOut", "easeInOut"] },
+        {
+          "type": "object",
+          "required": ["cubicBezier"],
+          "additionalProperties": false,
+          "properties": {
+            "cubicBezier": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["spring"],
+          "additionalProperties": false,
+          "properties": {
+            "spring": {
+              "type": "object",
+              "required": ["stiffness", "damping"],
+              "additionalProperties": false,
+              "properties": {
+                "stiffness": { "type": "number", "minimum": 1, "maximum": 1000 },
+                "damping": { "type": "number", "minimum": 1, "maximum": 100 },
+                "mass": { "type": "number", "default": 1 }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "AssetPath": {
+      "type": "string",
+      "description": "包内相对路径（如 assets/wallpapers/a.jpg）、内置资源（builtin://noise-1）或 https URL。禁止绝对本地路径，保证主题包可分发。",
+      "pattern": "^(assets/|widgets/|builtin://|https://)"
+    },
+
+    "//---------- 元信息 ----------//": {},
+
+    "Meta": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "maxLength": 60 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "author": { "type": "string" },
+        "description": { "type": "string", "maxLength": 400 },
+        "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 12 },
+        "preview": { "$ref": "#/$defs/AssetPath" },
+        "license": { "type": "string", "default": "CC-BY-4.0" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "colorMode": { "type": "string", "enum": ["dark", "light", "auto"], "default": "dark" },
+        "generator": {
+          "type": "object",
+          "description": "AI 生成溯源。人工创建时省略。",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["human", "ai", "ai-assisted"] },
+            "model": { "type": "string" },
+            "prompt": { "type": "string", "description": "用户原始一句话描述，用于二次迭代时的上下文。" },
+            "intentHash": { "type": "string" },
+            "repairs": {
+              "type": "array",
+              "description": "校验器自动修复记录，便于向用户解释「为什么和我说的不完全一样」。",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": { "type": "string" },
+                  "reason": { "type": "string" },
+                  "from": {}, "to": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "Capabilities": {
+      "type": "object",
+      "description": "运行要求声明。引擎在应用前检查，不满足时按 degradeTo 降级而不是报错。",
+      "additionalProperties": false,
+      "properties": {
+        "minEngineVersion": { "type": "string" },
+        "requires": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["gpu-shader", "video-decode", "webview", "transparency", "multi-monitor"] }
+        },
+        "performanceTier": { "type": "string", "enum": ["light", "balanced", "heavy"], "default": "balanced" },
+        "degradeTo": { "type": "string", "description": "能力不满足时回退的主题 ID。" }
+      }
+    },
+
+    "//---------- 一致性契约 ----------//": {},
+
+    "ConsistencyContract": {
+      "type": "object",
+      "description": "跨模块视觉一致性的硬性规则。引擎在渲染前强制执行，AI 生成的主题也必须过这一关。",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["strict", "balanced", "free"],
+          "default": "balanced",
+          "description": "strict=所有模块必须引用同一组 Token，禁止内联字面值；balanced=允许有限覆盖；free=不校验（仅供高级手工主题）。"
+        },
+        "contrastStandard": { "type": "string", "enum": ["APCA", "WCAG21"], "default": "APCA" },
+        "contrastFloor": {
+          "type": "object",
+          "description": "APCA Lc 下限（WCAG 模式下解释为对比度倍数）。校验器对所有前景/背景组合做检查。",
+          "additionalProperties": false,
+          "properties": {
+            "bodyText": { "type": "number", "default": 75 },
+            "largeText": { "type": "number", "default": 60 },
+            "uiElement": { "type": "number", "default": 45 },
+            "decorative": { "type": "number", "default": 15 }
+          }
+        },
+        "adaptiveScrim": {
+          "type": "object",
+          "description": "自适应遮罩：壁纸是任意图片/视频时，保证前景可读的最后一道防线。引擎实时采样前景元素背后的壁纸区域亮度，动态注入一层遮罩。",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "appliesTo": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["dock", "widgets", "iconLabels", "zones"] },
+              "default": ["dock", "widgets", "iconLabels", "zones"]
+            },
+            "strategy": {
+              "type": "string",
+              "enum": ["tint", "blur", "gradient", "textShadow", "outline", "auto"],
+              "default": "auto",
+              "description": "auto=引擎按元素类型选择：面板用 tint+blur，图标文字用 textShadow/outline。"
+            },
+            "maxOpacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "遮罩不透明度上限，防止把壁纸完全糊死。" },
+            "maxBlur": { "$ref": "#/$defs/Px", "default": 40 },
+            "sampleIntervalMs": { "type": "integer", "default": 400, "description": "动态壁纸下的重采样间隔。静态壁纸只采样一次。" },
+            "sampleDownscale": { "type": "integer", "default": 32, "description": "采样时先降采样到 N×N，控制 CPU 开销。" },
+            "hysteresis": { "type": "number", "default": 0.08, "description": "亮度变化超过该阈值才调整，避免动态壁纸下遮罩闪烁。" },
+            "transitionMs": { "type": "integer", "default": 600 }
+          }
+        },
+        "polarityFlip": {
+          "type": "object",
+          "description": "亮/暗自适应：当壁纸对应区域亮度跨过阈值，整体前景在明暗两套 Token 之间切换。",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "scope": { "type": "string", "enum": ["global", "per-element"], "default": "per-element", "description": "per-element=Dock 和小组件可以各自处于不同极性（壁纸上下亮度差大时必要）。" },
+            "threshold": { "type": "number", "default": 0.55, "description": "采样区域平均 OKLCh L 值阈值。" },
+            "hysteresis": { "type": "number", "default": 0.06 }
+          }
+        },
+        "elevationOrder": {
+          "type": "array",
+          "description": "z 序与视觉纵深顺序，索引即层级。引擎据此分配 z-index 与 elevation Token。",
+          "items": { "type": "string" },
+          "default": ["wallpaper", "scrim", "desktopIcons", "zones", "widgets", "dock", "overlay"]
+        },
+        "tokenLock": {
+          "type": "array",
+          "description": "被锁定的 Token 路径：任何模块的样式覆盖都不得改写这些值。用于强制「一家人」外观。",
+          "items": { "type": "string" },
+          "default": ["radius", "material", "motion", "typography.fontFamilies"]
+        },
+        "maxDistinctRadii": { "type": "integer", "default": 3, "description": "整套主题实际用到的不同圆角值上限。超出即判定为视觉噪音。" },
+        "maxHueFamilies": { "type": "integer", "default": 3, "description": "色板中不同色相族的上限（语义色不计）。" }
+      }
+    },
+
+    "//---------- Token 层 ----------//": {},
+
+    "Tokens": {
+      "type": "object",
+      "required": ["palette"],
+      "additionalProperties": false,
+      "properties": {
+
+        "palette": {
+          "type": "object",
+          "required": ["primary", "surface", "text"],
+          "additionalProperties": false,
+          "properties": {
+            "primary":   { "$ref": "#/$defs/ColorRamp", "description": "主色：Dock 指示器、选中态、强调描边。" },
+            "secondary": { "$ref": "#/$defs/ColorRamp", "description": "辅色：次级信息、图表第二序列。" },
+            "accent":    { "$ref": "#/$defs/ColorRamp", "description": "强调色：唯一的高饱和点缀，全屏出现频率应 < 5%。" },
+            "neutral":   { "$ref": "#/$defs/ColorRamp", "description": "中性灰阶，带主色微量色偏以避免脏灰。" },
+            "surface": {
+              "type": "object",
+              "description": "面板底色。所有面板（Dock / 小组件 / 分组区）必须从这里取值。",
+              "required": ["base"],
+              "additionalProperties": false,
+              "properties": {
+                "base":     { "$ref": "#/$defs/ColorValue", "description": "基础面板底色，通常带 alpha 供材质叠加。" },
+                "raised":   { "$ref": "#/$defs/ColorValue" },
+                "sunken":   { "$ref": "#/$defs/ColorValue" },
+                "overlay":  { "$ref": "#/$defs/ColorValue" },
+                "border":   { "$ref": "#/$defs/ColorValue" },
+                "borderStrong": { "$ref": "#/$defs/ColorValue" }
+              }
+            },
+            "text": {
+              "type": "object",
+              "description": "文字色。建议全部写成 $contrast，从而在任何壁纸下自动达标。",
+              "required": ["primary"],
+              "additionalProperties": false,
+              "properties": {
+                "primary":   { "$ref": "#/$defs/ColorValue" },
+                "secondary": { "$ref": "#/$defs/ColorValue" },
+                "tertiary":  { "$ref": "#/$defs/ColorValue" },
+                "inverse":   { "$ref": "#/$defs/ColorValue" },
+                "onAccent":  { "$ref": "#/$defs/ColorValue" }
+              }
+            },
+            "semantic": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "success": { "$ref": "#/$defs/ColorValue" },
+                "warning": { "$ref": "#/$defs/ColorValue" },
+                "danger":  { "$ref": "#/$defs/ColorValue" },
+                "info":    { "$ref": "#/$defs/ColorValue" }
+              }
+            }
+          }
+        },
+
+        "derivation": {
+          "type": "object",
+          "description": "壁纸取色策略。决定 $derive 原语如何求值。",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "algorithm": {
+              "type": "string",
+              "enum": ["kmeans", "medianCut", "vibrant", "octree"],
+              "default": "kmeans",
+              "description": "kmeans 在 OKLab 空间聚类，k=6，质量最好；medianCut 最快，适合动态壁纸逐帧。"
+            },
+            "sampleRegions": {
+              "type": "array",
+              "description": "取色区域。不同 UI 元素应从各自背后的区域取色，而不是全图平均 —— 这是 Dock 与壁纸「贴合」的关键。",
+              "items": {
+                "type": "object",
+                "required": ["id", "rect"],
+                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string", "description": "如 full / dockStrip / widgetArea / iconArea" },
+                  "rect": {
+                    "type": "object",
+                    "description": "归一化坐标 0~1。",
+                    "required": ["x", "y", "w", "h"],
+                    "properties": {
+                      "x": { "type": "number" }, "y": { "type": "number" },
+                      "w": { "type": "number" }, "h": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            },
+            "mixWithBase": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.35, "description": "提取色与主题原生色板的混合比。0=完全用主题原色，1=完全跟随壁纸。0.3~0.5 通常最好看：既呼应壁纸又保留主题性格。" },
+            "updatePolicy": {
+              "type": "string",
+              "enum": ["onWallpaperChange", "interval", "manual"],
+              "default": "onWallpaperChange",
+              "description": "动态壁纸若选 interval，配合 updateIntervalMs；一般不建议实时跟随，会导致 UI 颜色抖动。"
+            },
+            "updateIntervalMs": { "type": "integer", "minimum": 2000, "default": 15000 },
+            "transitionMs": { "type": "integer", "default": 800, "description": "配色切换的过渡动画时长，避免突变。" },
+            "minSaturation": { "type": "number", "default": 0.04, "description": "提取色低于此色度视为无效（灰度壁纸），回退 fallback。" }
+          }
+        },
+
+        "radius": {
+          "type": "object",
+          "description": "圆角。全局唯一来源，Dock / 小组件 / 图标 / 分组区都从这里取，禁止内联数值。",
+          "additionalProperties": false,
+          "properties": {
+            "none": { "$ref": "#/$defs/Px", "default": 0 },
+            "sm":   { "$ref": "#/$defs/Px", "default": 8 },
+            "md":   { "$ref": "#/$defs/Px", "default": 14 },
+            "lg":   { "$ref": "#/$defs/Px", "default": 22 },
+            "xl":   { "$ref": "#/$defs/Px", "default": 32 },
+            "pill": { "$ref": "#/$defs/Px", "default": 9999 },
+            "shape": {
+              "type": "string",
+              "enum": ["round", "squircle", "cut"],
+              "default": "round",
+              "description": "squircle=超椭圆（iOS 风格连续曲率），cut=切角。整套主题必须统一。"
+            },
+            "squircleN": { "type": "number", "default": 4, "description": "超椭圆指数，仅 shape=squircle 生效。" }
+          }
+        },
+
+        "spacing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base": { "type": "number", "enum": [4, 8], "default": 4, "description": "间距基数。所有间距必须是它的整数倍。" },
+            "scale": {
+              "type": "array",
+              "items": { "type": "number" },
+              "default": [0, 4, 8, 12, 16, 24, 32, 48, 64, 96],
+              "description": "允许使用的间距值白名单。校验器拒绝白名单外的间距。"
+            }
+          }
+        },
+
+        "elevation": {
+          "type": "object",
+          "description": "纵深层级。每级 = 阴影 + 可选边框高光，与 consistency.elevationOrder 对应。",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^level[0-5]$": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "shadows": { "type": "array", "items": { "$ref": "#/$defs/Shadow" } },
+                "rimLight": { "$ref": "#/$defs/ColorValue", "description": "顶部内描边高光，玻璃拟态的关键细节。" },
+                "rimWidth": { "$ref": "#/$defs/Px", "default": 1 }
+              }
+            }
+          }
+        },
+
+        "material": {
+          "type": "object",
+          "description": "材质定义。所有半透明面板的模糊/着色行为的唯一来源。",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["solid", "blur", "acrylic", "mica", "glass", "none"],
+                "description": "blur=纯高斯模糊；acrylic=模糊+着色+噪点（Windows 风格）；mica=壁纸低频采样着色（性能最好）；glass=模糊+饱和度提升+边缘高光。"
+              },
+              "blurRadius": { "$ref": "#/$defs/Px", "default": 24 },
+              "tint": { "$ref": "#/$defs/ColorValue" },
+              "tintOpacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 },
+              "luminosityOpacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.4, "description": "亮度层不透明度，决定材质在深浅壁纸下的稳定性。" },
+              "saturation": { "type": "number", "minimum": 0, "maximum": 3, "default": 1.2, "description": ">1 提升背景饱和，玻璃感来源。" },
+              "noise": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "opacity": { "type": "number", "minimum": 0, "maximum": 0.3, "default": 0.03 },
+                  "texture": { "$ref": "#/$defs/AssetPath" },
+                  "scale": { "type": "number", "default": 1 }
+                }
+              },
+              "border": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "width": { "$ref": "#/$defs/Px", "default": 1 },
+                  "color": { "$ref": "#/$defs/ColorValue" },
+                  "gradient": {
+                    "type": "object",
+                    "description": "渐变描边，模拟光从上方打下来的玻璃边缘。",
+                    "additionalProperties": false,
+                    "properties": {
+                      "angle": { "type": "number", "default": 180 },
+                      "stops": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": ["at", "color"],
+                          "properties": {
+                            "at": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "color": { "$ref": "#/$defs/ColorValue" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "fallback": { "type": "string", "description": "GPU 不支持时降级到的材质 key（通常是 solid）。" }
+            }
+          }
+        },
+
+        "typography": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fontFamilies": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "display": { "type": "array", "items": { "type": "string" }, "description": "字体栈，含中文回退。例：[\"Inter\",\"Microsoft YaHei UI\",\"sans-serif\"]" },
+                "body":    { "type": "array", "items": { "type": "string" } },
+                "mono":    { "type": "array", "items": { "type": "string" } },
+                "numeric": { "type": "array", "items": { "type": "string" }, "description": "时钟/数据组件专用，需等宽数字。" }
+              }
+            },
+            "embeddedFonts": {
+              "type": "array",
+              "description": "包内字体。引擎进程内加载，不写入系统字体目录。",
+              "items": {
+                "type": "object",
+                "required": ["family", "src"],
+                "properties": {
+                  "family": { "type": "string" },
+                  "src": { "$ref": "#/$defs/AssetPath" },
+                  "weight": { "type": "integer" },
+                  "style": { "type": "string", "enum": ["normal", "italic"] }
+                }
+              }
+            },
+            "scale": {
+              "type": "object",
+              "description": "字号阶梯。key 为语义名，避免出现 h1~h6 这种和桌面场景无关的命名。",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["size"],
+                "additionalProperties": false,
+                "properties": {
+                  "size": { "$ref": "#/$defs/Px" },
+                  "lineHeight": { "type": "number", "description": "倍数，非像素。" },
+                  "weight": { "type": "integer", "minimum": 100, "maximum": 900 },
+                  "letterSpacing": { "type": "number", "description": "em 单位。大字号应为负值。" },
+                  "transform": { "type": "string", "enum": ["none", "uppercase", "lowercase"] }
+                }
+              }
+            }
+          }
+        },
+
+        "motion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "duration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "instant": { "type": "integer", "default": 100 },
+                "fast":    { "type": "integer", "default": 160 },
+                "normal":  { "type": "integer", "default": 260 },
+                "slow":    { "type": "integer", "default": 420 },
+                "ambient": { "type": "integer", "default": 1200, "description": "呼吸/漂浮类环境动效。" }
+              }
+            },
+            "easing": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/Easing" }
+            },
+            "energy": {
+              "type": "string",
+              "enum": ["calm", "standard", "playful"],
+              "default": "standard",
+              "description": "整体动效性格。引擎据此统一缩放时长与弹性 —— AI 只需给这一个词，就能让所有模块动效协调。"
+            },
+            "respectReducedMotion": { "type": "boolean", "default": true }
+          }
+        },
+
+        "iconography": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "style": { "type": "string", "enum": ["filled", "outline", "duotone", "pixel", "3d", "original"], "default": "original" },
+            "strokeWidth": { "type": "number", "default": 1.75 },
+            "grid": { "type": "integer", "default": 24 },
+            "cornerRadius": { "$ref": "#/$defs/Px" }
+          }
+        }
+      }
+    },
+
+    "//---------- 壁纸层 ----------//": {},
+
+    "WallpaperLayerSet": {
+      "type": "object",
+      "description": "壁纸由多层合成（例如：视频底层 + Shader 光效 + 静态遮罩）。层从下往上渲染。",
+      "additionalProperties": false,
+      "properties": {
+        "layers": { "type": "array", "items": { "$ref": "#/$defs/WallpaperLayer" }, "minItems": 1 },
+        "monitorStrategy": {
+          "type": "string",
+          "enum": ["duplicate", "span", "perMonitor"],
+          "default": "duplicate"
+        },
+        "monitorOverrides": {
+          "type": "object",
+          "description": "key 为显示器索引或标识。",
+          "additionalProperties": { "$ref": "#/$defs/WallpaperLayerSet" }
+        },
+        "playback": {
+          "type": "object",
+          "description": "性能与省电策略。这是动态壁纸能否日常使用的分水岭。",
+          "additionalProperties": false,
+          "properties": {
+            "pauseWhen": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["fullscreenApp", "windowMaximized", "desktopHidden", "onBattery", "cpuAbove", "gameMode", "userIdle", "remoteSession"] },
+              "default": ["fullscreenApp", "desktopHidden", "onBattery"]
+            },
+            "cpuThreshold": { "type": "number", "default": 70 },
+            "fpsCap": { "type": "integer", "minimum": 1, "maximum": 144, "default": 30 },
+            "fpsCapOnBattery": { "type": "integer", "default": 10 },
+            "audio": { "type": "string", "enum": ["mute", "play", "duckWhenOtherAudio"], "default": "mute" },
+            "resumeFadeMs": { "type": "integer", "default": 400 }
+          }
+        },
+        "transition": {
+          "type": "object",
+          "description": "壁纸切换动画（幻灯片/主题切换时）。",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["none", "fade", "slide", "zoom", "morph", "dissolve"], "default": "fade" },
+            "durationMs": { "type": "integer", "default": 900 },
+            "easing": { "$ref": "#/$defs/Easing" }
+          }
+        }
+      }
+    },
+
+    "WallpaperLayer": {
+      "type": "object",
+      "required": ["id", "type"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["image", "slideshow", "video", "shader", "web", "gradient", "scrim"] },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
+        "blendMode": {
+          "type": "string",
+          "enum": ["normal", "multiply", "screen", "overlay", "softLight", "hardLight", "colorDodge", "difference", "hue", "saturation", "color", "luminosity"],
+          "default": "normal"
+        },
+        "filters": {
+          "type": "object",
+          "description": "对该层的后处理。用 blur+brightness 把任意照片压成「可以放前景元素」的底子，是低成本保可读性的手段。",
+          "additionalProperties": false,
+          "properties": {
+            "blur": { "$ref": "#/$defs/Px", "default": 0 },
+            "brightness": { "type": "number", "default": 1 },
+            "contrast": { "type": "number", "default": 1 },
+            "saturate": { "type": "number", "default": 1 },
+            "hueRotate": { "type": "number", "default": 0 },
+            "grayscale": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+            "vignette": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+            "grain": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 }
+          }
+        },
+        "parallax": {
+          "type": "object",
+          "description": "鼠标视差。多层不同 strength 可制造纵深。",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.04 },
+            "easing": { "$ref": "#/$defs/Easing" }
+          }
+        },
+        "contributesToColorExtraction": { "type": "boolean", "default": true, "description": "该层是否参与取色。scrim 层应为 false。" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "image" } } },
+          "then": {
+            "required": ["src"],
+            "properties": {
+              "src": { "$ref": "#/$defs/AssetPath" },
+              "fit": { "type": "string", "enum": ["cover", "contain", "fill", "tile", "center"], "default": "cover" },
+              "position": { "type": "string", "default": "center" },
+              "scale": { "type": "number", "default": 1 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "slideshow" } } },
+          "then": {
+            "required": ["sources"],
+            "properties": {
+              "sources": { "type": "array", "items": { "$ref": "#/$defs/AssetPath" }, "minItems": 1 },
+              "intervalSec": { "type": "integer", "minimum": 5, "default": 600 },
+              "shuffle": { "type": "boolean", "default": true },
+              "fit": { "type": "string", "enum": ["cover", "contain", "fill"], "default": "cover" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "video" } } },
+          "then": {
+            "required": ["src"],
+            "properties": {
+              "src": { "$ref": "#/$defs/AssetPath" },
+              "loop": { "type": "boolean", "default": true },
+              "playbackRate": { "type": "number", "minimum": 0.1, "maximum": 4, "default": 1 },
+              "fit": { "type": "string", "enum": ["cover", "contain", "fill"], "default": "cover" },
+              "hardwareDecode": { "type": "boolean", "default": true },
+              "loopMode": { "type": "string", "enum": ["restart", "pingpong"], "default": "restart" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "shader" } } },
+          "then": {
+            "required": ["src"],
+            "properties": {
+              "src": { "$ref": "#/$defs/AssetPath", "description": "GLSL fragment shader。约定 uniform: iTime / iResolution / iMouse，兼容 Shadertoy 写法。" },
+              "uniforms": {
+                "type": "object",
+                "description": "自定义 uniform。颜色类 uniform 可用 ColorValue，从而让 Shader 跟随主题配色 —— 这是 Shader 壁纸融入设计系统的关键。",
+                "additionalProperties": {
+                  "oneOf": [
+                    { "type": "number" },
+                    { "type": "boolean" },
+                    { "type": "array", "items": { "type": "number" }, "maxItems": 4 },
+                    { "$ref": "#/$defs/ColorValue" }
+                  ]
+                }
+              },
+              "quality": { "type": "string", "enum": ["low", "medium", "high"], "default": "medium", "description": "内部渲染分辨率倍率 0.5 / 0.75 / 1.0。" },
+              "fps": { "type": "integer", "default": 30 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "web" } } },
+          "then": {
+            "required": ["src"],
+            "properties": {
+              "src": { "$ref": "#/$defs/AssetPath" },
+              "interactive": { "type": "boolean", "default": false, "description": "true 时鼠标事件穿透到网页，会阻挡桌面图标操作，慎用。" },
+              "transparent": { "type": "boolean", "default": false },
+              "injectTokens": { "type": "boolean", "default": true, "description": "把主题 Token 以 CSS 自定义属性注入网页，让网页壁纸自动跟随主题配色。" },
+              "permissions": { "type": "array", "items": { "type": "string", "enum": ["network", "audio", "storage", "clipboard"] }, "default": [] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "gradient" } } },
+          "then": {
+            "required": ["stops"],
+            "properties": {
+              "gradientType": { "type": "string", "enum": ["linear", "radial", "conic", "mesh"], "default": "linear" },
+              "angle": { "type": "number", "default": 160 },
+              "stops": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "required": ["at", "color"],
+                  "properties": {
+                    "at": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "color": { "$ref": "#/$defs/ColorValue" }
+                  }
+                }
+              },
+              "animate": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": { "type": "boolean", "default": false },
+                  "mode": { "type": "string", "enum": ["rotate", "drift", "breathe"], "default": "drift" },
+                  "periodSec": { "type": "number", "default": 30 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "scrim" } } },
+          "then": {
+            "description": "手工遮罩层。与 consistency.adaptiveScrim 的区别：这是主题作者主动设计的固定遮罩（如底部渐隐给 Dock 垫底），adaptiveScrim 是引擎按实时亮度自动追加的。",
+            "properties": {
+              "anchor": { "type": "string", "enum": ["top", "bottom", "left", "right", "full", "radial"], "default": "bottom" },
+              "sizePct": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 },
+              "color": { "$ref": "#/$defs/ColorValue" },
+              "falloff": { "type": "string", "enum": ["linear", "easeOut", "gauss"], "default": "easeOut" },
+              "contributesToColorExtraction": { "const": false }
+            }
+          }
+        }
+      ]
+    },
+
+    "//---------- Dock 层 ----------//": {},
+
+    "Dock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "edge": { "type": "string", "enum": ["bottom", "top", "left", "right"], "default": "bottom" },
+        "align": { "type": "string", "enum": ["start", "center", "end"], "default": "center" },
+        "offset": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "default": { "x": 0, "y": 12 } },
+        "monitor": { "type": "string", "enum": ["primary", "all", "cursor"], "default": "primary" },
+
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "iconSize": { "$ref": "#/$defs/Px", "default": 48 },
+            "iconGap": { "$ref": "#/$defs/Px", "default": 10 },
+            "padding": { "$ref": "#/$defs/Inset", "default": 10 },
+            "maxIcons": { "type": "integer", "default": 24 },
+            "overflow": { "type": "string", "enum": ["scroll", "shrink", "wrap", "more"], "default": "shrink" }
+          }
+        },
+
+        "surface": {
+          "type": "object",
+          "description": "Dock 底板。material / radius / elevation 必须是 Token 引用，不得内联 —— 这是与小组件保持同族外观的硬约束。",
+          "additionalProperties": false,
+          "properties": {
+            "material": { "type": "string", "description": "tokens.material 的 key" },
+            "radius": { "type": "string", "description": "tokens.radius 的 key" },
+            "elevation": { "type": "string", "description": "tokens.elevation 的 key" },
+            "mode": { "type": "string", "enum": ["panel", "separate", "none"], "default": "panel", "description": "panel=统一底板；separate=每个图标独立底板；none=无底板（图标裸放，此时必须开 adaptiveScrim.textShadow）。" },
+            "inset": { "$ref": "#/$defs/Inset" }
+          }
+        },
+
+        "autoHide": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "enum": ["never", "always", "onWindowOverlap", "onFullscreen"], "default": "onWindowOverlap" },
+            "revealZonePx": { "$ref": "#/$defs/Px", "default": 4 },
+            "revealDelayMs": { "type": "integer", "default": 80 },
+            "hideDelayMs": { "type": "integer", "default": 500 },
+            "animation": { "type": "string", "enum": ["slide", "fade", "scale", "slideFade"], "default": "slideFade" }
+          }
+        },
+
+        "iconStyle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": { "type": "string", "enum": ["system", "pack", "auto"], "default": "auto", "description": "auto=优先 pack 中匹配的图标，缺失回退系统图标。" },
+            "pack": { "$ref": "#/$defs/AssetPath" },
+            "shape": { "type": "string", "enum": ["original", "squircle", "circle", "roundedRect", "hexagon"], "default": "original" },
+            "maskOriginalIcon": { "type": "boolean", "default": false, "description": "true 时把系统图标裁进 shape 里，代价是可能裁掉异形图标的内容。" },
+            "padding": { "$ref": "#/$defs/Px", "default": 0 },
+            "background": { "$ref": "#/$defs/ColorValue", "description": "shape 内的底色。仅 shape≠original 时生效。" },
+            "monochrome": {
+              "type": "object",
+              "description": "单色化：把所有图标统一成同色剪影。这是让杂乱的第三方图标瞬间「一家人」的最强手段。",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "color": { "$ref": "#/$defs/ColorValue" },
+                "preserveBrandOnHover": { "type": "boolean", "default": true, "description": "hover 时恢复原色，兼顾美观与可辨识。" }
+              }
+            },
+            "shadow": { "$ref": "#/$defs/Shadow" },
+            "label": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "policy": { "type": "string", "enum": ["never", "hover", "always"], "default": "hover" },
+                "placement": { "type": "string", "enum": ["tooltip", "below", "inline"], "default": "tooltip" },
+                "typography": { "type": "string", "description": "tokens.typography.scale 的 key" }
+              }
+            }
+          }
+        },
+
+        "indicator": {
+          "type": "object",
+          "description": "运行状态指示。",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["none", "dot", "bar", "glow", "underline", "ring"], "default": "dot" },
+            "color": { "$ref": "#/$defs/ColorValue" },
+            "size": { "$ref": "#/$defs/Px", "default": 4 },
+            "activeColor": { "$ref": "#/$defs/ColorValue" },
+            "multiWindowStyle": { "type": "string", "enum": ["single", "count", "multiDot"], "default": "single" }
+          }
+        },
+
+        "hover": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "effect": { "type": "string", "enum": ["none", "magnify", "lift", "glow", "tilt", "scale", "liquid"], "default": "magnify" },
+            "magnifyScale": { "type": "number", "minimum": 1, "maximum": 2.5, "default": 1.45 },
+            "magnifyRange": { "type": "integer", "minimum": 0, "maximum": 5, "default": 2, "description": "波及左右各 N 个邻居，形成 macOS 式波浪。" },
+            "liftPx": { "$ref": "#/$defs/Px", "default": 8 },
+            "glowColor": { "$ref": "#/$defs/ColorValue" },
+            "glowRadius": { "$ref": "#/$defs/Px", "default": 20 },
+            "duration": { "type": "string", "default": "fast", "description": "tokens.motion.duration 的 key" },
+            "easing": { "type": "string", "description": "tokens.motion.easing 的 key" }
+          }
+        },
+
+        "click": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "effect": { "type": "string", "enum": ["none", "bounce", "press", "ripple", "flash"], "default": "bounce" },
+            "launchAnimation": { "type": "string", "enum": ["none", "bounceLoop", "pulse", "spinner"], "default": "bounceLoop" }
+          }
+        },
+
+        "reflection": {
+          "type": "object",
+          "description": "底板倒影。仅 edge=bottom 有意义，属于强风格特征，慎用。",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "opacity": { "type": "number", "default": 0.18 },
+            "heightPct": { "type": "number", "default": 0.4 },
+            "blur": { "$ref": "#/$defs/Px", "default": 2 }
+          }
+        },
+
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "string", "enum": ["app", "folder", "file", "url", "command", "separator", "spacer", "trash", "runningApps", "widget"] },
+              "id": { "type": "string" },
+              "target": { "type": "string", "description": "路径 / URL / 命令。主题包分发时此字段通常为空，由用户本地填充 —— 主题只定义外观，不定义用户的应用列表。" },
+              "label": { "type": "string" },
+              "icon": { "$ref": "#/$defs/AssetPath" },
+              "size": { "type": "number", "default": 1, "description": "相对 iconSize 的倍率，用于强调某个图标。" },
+              "badge": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "source": { "type": "string", "enum": ["none", "unreadCount", "custom"] },
+                  "color": { "$ref": "#/$defs/ColorValue" }
+                }
+              },
+              "folderStyle": { "type": "string", "enum": ["grid", "fan", "list", "stack"], "default": "grid" }
+            }
+          }
+        }
+      }
+    },
+
+    "//---------- 小组件层 ----------//": {},
+
+    "WidgetLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "grid": {
+          "type": "object",
+          "description": "栅格是小组件与桌面图标共用的坐标系，保证两者不打架。",
+          "additionalProperties": false,
+          "properties": {
+            "columns": { "type": "integer", "minimum": 4, "maximum": 48, "default": 24 },
+            "rows": { "type": "integer", "minimum": 4, "maximum": 32, "default": 12 },
+            "gutter": { "$ref": "#/$defs/Px", "default": 16 },
+            "margin": { "$ref": "#/$defs/Inset", "default": 32 },
+            "snap": { "type": "boolean", "default": true },
+            "reserveDockArea": { "type": "boolean", "default": true, "description": "自动从栅格中扣除 Dock 占用区域，防止小组件被 Dock 压住。" }
+          }
+        },
+
+        "defaults": {
+          "type": "object",
+          "description": "所有小组件的默认外观。单个实例只能做有限覆盖（受 consistency.tokenLock 约束）。",
+          "additionalProperties": false,
+          "properties": {
+            "material": { "type": "string" },
+            "radius": { "type": "string" },
+            "elevation": { "type": "string" },
+            "padding": { "$ref": "#/$defs/Px", "default": 16 },
+            "titleTypography": { "type": "string" },
+            "bodyTypography": { "type": "string" },
+            "accentColor": { "$ref": "#/$defs/ColorValue" },
+            "density": { "type": "string", "enum": ["compact", "comfortable", "spacious"], "default": "comfortable" },
+            "chromeless": { "type": "boolean", "default": false, "description": "true=无底板，内容直接浮在壁纸上（极简风常用）。此时引擎强制启用 textShadow 型 scrim。" }
+          }
+        },
+
+        "instances": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "rect"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "type": {
+                "type": "string",
+                "description": "内置类型或自定义组件 ID。",
+                "examples": ["clock", "calendar", "weather", "systemMonitor", "mediaPlayer", "notes", "todo", "search", "quickLaunch", "photoFrame", "rss", "countdown", "custom:*"]
+              },
+              "rect": {
+                "type": "object",
+                "required": ["col", "row", "colSpan", "rowSpan"],
+                "additionalProperties": false,
+                "properties": {
+                  "col": { "type": "integer", "minimum": 0 },
+                  "row": { "type": "integer", "minimum": 0 },
+                  "colSpan": { "type": "integer", "minimum": 1 },
+                  "rowSpan": { "type": "integer", "minimum": 1 }
+                }
+              },
+              "monitor": { "type": "integer", "default": 0 },
+              "zIndex": { "type": "integer", "default": 0 },
+              "locked": { "type": "boolean", "default": false },
+              "visibility": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": { "type": "string", "enum": ["always", "onDesktopFocus", "onHover", "schedule"], "default": "always" },
+                  "schedule": { "type": "string", "description": "cron 或 HH:MM-HH:MM" },
+                  "fadeWhenWindowOverlap": { "type": "boolean", "default": false }
+                }
+              },
+              "style": {
+                "type": "object",
+                "description": "有限的样式覆盖。只能改这几项，且值必须是 Token key —— 从根上杜绝「每个组件长得不一样」。",
+                "additionalProperties": false,
+                "properties": {
+                  "material": { "type": "string" },
+                  "radius": { "type": "string" },
+                  "elevation": { "type": "string" },
+                  "accentColor": { "$ref": "#/$defs/ColorValue" },
+                  "density": { "type": "string", "enum": ["compact", "comfortable", "spacious"] },
+                  "chromeless": { "type": "boolean" },
+                  "opacity": { "type": "number", "minimum": 0.2, "maximum": 1 }
+                }
+              },
+              "config": {
+                "type": "object",
+                "description": "组件自身的功能配置，由组件的 configSchema 约束。引擎不解释内容。"
+              }
+            }
+          }
+        },
+
+        "customWidgets": {
+          "type": "array",
+          "description": "包内自定义小组件。渲染器无关：native 由宿主实现，html 走 WebView 沙箱。",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "renderer", "entry"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^custom:[a-z0-9-]+$" },
+              "name": { "type": "string" },
+              "renderer": { "type": "string", "enum": ["html", "lottie", "shader", "native"] },
+              "entry": { "$ref": "#/$defs/AssetPath" },
+              "defaultSize": {
+                "type": "object",
+                "properties": { "colSpan": { "type": "integer" }, "rowSpan": { "type": "integer" } }
+              },
+              "minSize": {
+                "type": "object",
+                "properties": { "colSpan": { "type": "integer" }, "rowSpan": { "type": "integer" } }
+              },
+              "permissions": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["network", "filesystem.read", "system.metrics", "media.control", "notifications", "location", "clipboard"] },
+                "default": []
+              },
+              "refreshIntervalSec": { "type": "integer", "default": 60 },
+              "configSchema": { "type": "object", "description": "内嵌 JSON Schema，供设置界面自动生成表单。" },
+              "tokenBinding": {
+                "type": "boolean",
+                "default": true,
+                "description": "true 时引擎把全部 Token 以 CSS 自定义属性（--dk-*）注入组件，自定义组件因此自动跟随主题 —— 这是第三方组件也能「一家人」的机制。"
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "//---------- 桌面整理层 ----------//": {},
+
+    "DesktopLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "icons": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visibility": {
+              "type": "string",
+              "enum": ["all", "none", "rules", "onHover", "onDoubleClick"],
+              "default": "all",
+              "description": "none=彻底隐藏桌面图标（极简主题常用）；onDoubleClick=双击桌面空白处切换显隐。"
+            },
+            "rules": {
+              "type": "array",
+              "description": "按顺序匹配，首个命中生效。",
+              "items": {
+                "type": "object",
+                "required": ["match", "action"],
+                "additionalProperties": false,
+                "properties": {
+                  "match": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": { "type": "string", "enum": ["file", "folder", "shortcut", "systemItem", "any"] },
+                      "extensions": { "type": "array", "items": { "type": "string" } },
+                      "nameRegex": { "type": "string" },
+                      "pathPrefix": { "type": "string" },
+                      "olderThanDays": { "type": "integer" },
+                      "largerThanMB": { "type": "number" }
+                    }
+                  },
+                  "action": { "type": "string", "enum": ["show", "hide", "moveToZone", "pin", "archive"] },
+                  "zoneId": { "type": "string" },
+                  "note": { "type": "string", "description": "给用户看的规则说明，也是 AI 生成规则时的解释字段。" }
+                }
+              }
+            },
+            "autoHideIdle": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false },
+                "delaySec": { "type": "integer", "default": 20 },
+                "fadeMs": { "type": "integer", "default": 500 }
+              }
+            },
+            "style": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "size": { "$ref": "#/$defs/Px", "default": 48 },
+                "gridGap": { "$ref": "#/$defs/Px", "default": 16 },
+                "shape": { "type": "string", "enum": ["original", "squircle", "circle", "roundedRect"], "default": "original" },
+                "label": {
+                  "type": "object",
+                  "description": "图标文字是最难保证可读的元素（直接贴在任意壁纸上）。三种保护手段可叠加。",
+                  "additionalProperties": false,
+                  "properties": {
+                    "color": { "$ref": "#/$defs/ColorValue" },
+                    "typography": { "type": "string" },
+                    "maxLines": { "type": "integer", "default": 2 },
+                    "protection": {
+                      "type": "string",
+                      "enum": ["none", "shadow", "outline", "pill", "auto"],
+                      "default": "auto",
+                      "description": "pill=文字加胶囊底；auto=引擎按局部壁纸对比度自动选最轻量的够用方案。"
+                    },
+                    "pillColor": { "$ref": "#/$defs/ColorValue" },
+                    "hideLabels": { "type": "boolean", "default": false }
+                  }
+                },
+                "sortBy": { "type": "string", "enum": ["name", "type", "date", "size", "manual"], "default": "manual" }
+              }
+            }
+          }
+        },
+
+        "zones": {
+          "type": "array",
+          "description": "桌面分组区（栅栏）。视觉样式必须与小组件同源，否则桌面会分裂成两种设计语言。",
+          "items": {
+            "type": "object",
+            "required": ["id", "rect"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "rect": {
+                "type": "object",
+                "required": ["col", "row", "colSpan", "rowSpan"],
+                "properties": {
+                  "col": { "type": "integer" }, "row": { "type": "integer" },
+                  "colSpan": { "type": "integer" }, "rowSpan": { "type": "integer" }
+                },
+                "description": "与 widgets.grid 同一坐标系。"
+              },
+              "monitor": { "type": "integer", "default": 0 },
+              "style": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "material": { "type": "string" },
+                  "radius": { "type": "string" },
+                  "elevation": { "type": "string" },
+                  "titleTypography": { "type": "string" },
+                  "accentColor": { "$ref": "#/$defs/ColorValue" },
+                  "borderStyle": { "type": "string", "enum": ["none", "solid", "dashed", "glow"], "default": "solid" }
+                }
+              },
+              "layout": { "type": "string", "enum": ["grid", "list", "stack", "compact"], "default": "grid" },
+              "collapsible": { "type": "boolean", "default": true },
+              "collapsed": { "type": "boolean", "default": false },
+              "accepts": {
+                "type": "object",
+                "description": "自动收纳规则，与 icons.rules 的 match 同构。",
+                "properties": {
+                  "kind": { "type": "string" },
+                  "extensions": { "type": "array", "items": { "type": "string" } },
+                  "nameRegex": { "type": "string" }
+                }
+              },
+              "scrollable": { "type": "boolean", "default": true }
+            }
+          }
+        },
+
+        "autoOrganize": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "engine": { "type": "string", "enum": ["rules", "ai"], "default": "rules", "description": "ai=调用 AI 对文件名/类型做语义分组，产出的是新的 zones + rules，仍然落在本 Schema 内。" },
+            "trigger": { "type": "string", "enum": ["manual", "onNewFile", "daily", "onIdle"], "default": "manual" },
+            "dryRun": { "type": "boolean", "default": true, "description": "先预览再执行。涉及文件移动，默认必须为 true。" },
+            "physicalMove": { "type": "boolean", "default": false, "description": "false=仅视觉分组，不动磁盘文件（推荐）。true=真实移动到子目录，风险高。" }
+          }
+        }
+      }
+    }
+  }
+}

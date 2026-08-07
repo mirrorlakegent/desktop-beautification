@@ -1,0 +1,55 @@
+壁纸库新增清单（2026-08-04）
+================================
+
+本次新增：静态 20 张 + 动态 10 个，覆盖全部 8 个时段（清晨 / 早上 / 中午 / 下午 / 傍晚 / 黄昏 / 晚上 / 深夜）。
+
+来源说明
+--------
+- 静态壁纸：AI 生成（无前缀的 *.png）与 网络下载（web-*.jpg，来自 Wikimedia Commons 公有领域/自由授权）各 10 张，
+  方便你对比筛选。
+- 动态壁纸：原计划同样做「AI + 网络」对比，但 Wikimedia 的视频下载源（upload.wikimedia.org）在本环境被限流/超时，
+  10 个动态视频全部由 AI 生成（sunrise-2/3、morning-2、midday-2、afternoon-2、dusk-2、sunset-2/3、night-city-2、milkyway-2）。
+  若以后想要真实素材的动态壁纸，可在网络恢复后重试，或手动把视频放进对应「动态壁纸」文件夹。
+
+各时段新增明细
+--------------
+清晨
+  静态: dawn-3.png (AI)  |  web-dawn-1.jpg, web-dawn-2.jpg (网络)
+  动态: sunrise-2.mp4, sunrise-3.mp4 (AI)
+
+早上
+  静态: morning-3.png (AI)  |  web-morning-1.jpg (网络)
+  动态: morning-2.mp4 (AI)
+
+中午
+  静态: midday-3.png (AI)  |  web-midday-1.jpg (网络)
+  动态: midday-2.mp4 (AI)
+
+下午
+  静态: afternoon-2.png (AI)  |  web-afternoon-1.jpg (网络)
+  动态: afternoon-2.mp4 (AI)
+
+傍晚
+  静态: dusk-3.png (AI)  |  web-dusk-1.jpg (网络)
+  动态: dusk-2.mp4 (AI)
+
+黄昏
+  静态: sunset-3.png (AI)  |  web-sunset-1.jpg (网络)
+  动态: sunset-2.mp4, sunset-3.mp4 (AI)
+
+晚上
+  静态: night-city-3.png, night-city-4.png (AI)  |  web-night-city-1.jpg, web-night-city-2.jpg (网络)
+  动态: night-city-2.mp4 (AI)
+
+深夜
+  静态: milkyway-3.png, milkyway-4.png (AI)  |  web-milkyway-1.jpg (网络)
+  动态: milkyway-2.mp4 (AI)
+
+筛选建议
+--------
+- 偏好 AI 风格：保留无 web- 前缀的文件（dawn-3、morning-3、midday-3、afternoon-2、dusk-3、sunset-3、night-city-3/4、
+  milkyway-3/4，以及所有新增的 *.mp4）。
+- 偏好真实摄影：保留 web- 前缀的 *.jpg。
+- 不喜欢的文件可直接删除，软件会按当前时间随机轮换本时段目录内的文件。
+
+备注：动态壁纸本环境仅验证了 mp4 可被软件识别；若后续补充 webm/ogv，请确认软件支持对应解码。

@@ -1,0 +1,3 @@
+﻿Total running VMs: 2
+E:\VMwar_xitongwenjian\win10\Windows 10 x64.vmx
+D:\Program Files\VMwar_xitongwenjian\win10\Windows 10 x64.vmx

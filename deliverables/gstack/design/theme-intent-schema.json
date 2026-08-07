@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deskkit.local/schemas/theme-intent/1.0.0/intent.schema.json",
+  "title": "DeskKit Theme Intent (AI 输出契约)",
+  "description": "AI 的唯一合法输出格式。注意：AI 不直接产出完整 theme.json —— 那有 200+ 字段，LLM 的字段缺失率、越界率与色阶计算错误率都不可接受。AI 只输出这份约 35 字段的「设计意图」，再由确定性编译器 (Expander) 展开为完整 theme.json。AI 负责审美判断，编译器负责数学与约束。",
+  "type": "object",
+  "required": ["intentVersion", "name", "basedOn", "colorMode", "palette", "surfaceStyle", "shapeLanguage", "wallpaper", "dock"],
+  "additionalProperties": false,
+
+  "properties": {
+    "intentVersion": { "type": "string", "const": "1.0" },
+
+    "name": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "主题名。要有性格，避免『我的主题1』这类无意义命名。"
+    },
+
+    "rationale": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "设计意图说明，一到两句。给用户看，也用于二次迭代时向 AI 回灌上下文。"
+    },
+
+    "basedOn": {
+      "type": "string",
+      "enum": ["obsidian-glass", "paper-light", "neon-grid", "phosphor-term"],
+      "description": "风格锚点。必填。AI 必须选一个最接近的预置主题作为基底，只表达差异。这一约束把 AI 的搜索空间从『无限』压缩到『四个已知良好设计的邻域』，是稳定产出的最大功臣。"
+    },
+
+    "mood": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 5,
+      "description": "氛围关键词，如 [\"静谧\",\"深海\",\"克制\"]。仅作记录与检索，不参与渲染。"
+    },
+
+    "colorMode": { "type": "string", "enum": ["dark", "light"] },
+
+    "palette": {
+      "type": "object",
+      "required": ["strategy", "primary", "accent"],
+      "additionalProperties": false,
+      "description": "AI 只需给 2~3 个种子色。全部 50~900 色阶由编译器在 OKLCh 空间按标准明度曲线生成 —— 不要让 AI 手写色阶，它给出的明度分布几乎总是不均匀的。",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["fixed", "fromWallpaper", "hybrid"],
+          "description": "fixed=用下面给的固定色；fromWallpaper=运行时从壁纸提取（下面的色值作为 fallback）；hybrid=提取后与固定色按 mixWithBase 混合（推荐，既呼应壁纸又保住主题性格）。"
+        },
+        "primary": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "主色（500 档）。" },
+        "secondary": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "强调色（500 档）。应与 primary 有明显色相差或明显纯度差，否则编译器会警告『两个主色打架』。" },
+        "neutralTint": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "description": "中性灰的色偏基准。纯灰会显脏，一般取 primary 的低饱和版本。可省略，编译器自动推导。"
+        },
+        "saturation": {
+          "type": "string",
+          "enum": ["muted", "balanced", "vivid", "neon"],
+          "default": "balanced",
+          "description": "整体饱和度性格。编译器据此统一缩放全色板色度，保证不会出现『主色很淡但强调色荧光』的割裂。"
+        },
+        "wallpaperMix": {
+          "type": "number", "minimum": 0, "maximum": 1, "default": 0.35,
+          "description": "仅 strategy=hybrid 生效。"
+        }
+      }
+    },
+
+    "surfaceStyle": {
+      "type": "object",
+      "required": ["material"],
+      "additionalProperties": false,
+      "description": "面板材质。Dock / 小组件 / 分组区共用一套 —— AI 在这里只能给一个答案，从机制上杜绝三个模块材质不一致。",
+      "properties": {
+        "material": {
+          "type": "string",
+          "enum": ["solid", "frosted", "glass", "acrylic", "mica", "chromeless"],
+          "description": "chromeless=无底板，内容裸浮在壁纸上。选它时编译器会强制开启文字描边/投影保护。"
+        },
+        "transparency": { "type": "string", "enum": ["opaque", "low", "medium", "high"], "default": "medium" },
+        "border": { "type": "string", "enum": ["none", "hairline", "visible", "glow"], "default": "hairline" },
+        "shadowDepth": { "type": "string", "enum": ["flat", "subtle", "pronounced", "dramatic"], "default": "subtle" },
+        "texture": { "type": "string", "enum": ["none", "noise", "scanline", "paper", "grid"], "default": "none" }
+      }
+    },
+
+    "shapeLanguage": {
+      "type": "object",
+      "required": ["radiusScale"],
+      "additionalProperties": false,
+      "properties": {
+        "radiusScale": {
+          "type": "string",
+          "enum": ["sharp", "soft", "round", "pill"],
+          "description": "sharp=0/2/4；soft=6/10/14；round=12/20/28；pill=底板全胶囊。编译器展开为完整 radius 阶梯，保证 maxDistinctRadii 不超标。"
+        },
+        "cornerShape": { "type": "string", "enum": ["round", "squircle", "cut"], "default": "round" },
+        "iconShape": { "type": "string", "enum": ["original", "squircle", "circle", "roundedRect", "hexagon"], "default": "original" },
+        "density": { "type": "string", "enum": ["compact", "comfortable", "spacious"], "default": "comfortable" }
+      }
+    },
+
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "AI 给字体『性格』而非具体字体名 —— 用户机器上不一定装了 AI 想要的字体。编译器按性格从可用字体池里挑，并保证有中文回退。",
+      "properties": {
+        "displayCharacter": {
+          "type": "string",
+          "enum": ["geometric", "humanist", "grotesque", "serif", "condensed", "mono", "pixel", "rounded"],
+          "default": "grotesque"
+        },
+        "bodyCharacter": { "type": "string", "enum": ["geometric", "humanist", "grotesque", "serif", "mono", "rounded"], "default": "humanist" },
+        "weightBias": { "type": "string", "enum": ["light", "regular", "medium", "bold"], "default": "regular" },
+        "scaleRatio": { "type": "number", "minimum": 1.1, "maximum": 1.5, "default": 1.25 },
+        "letterSpacingBias": { "type": "string", "enum": ["tight", "normal", "wide", "veryWide"], "default": "normal" },
+        "preferredFamilies": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 3,
+          "description": "可选的具体字体建议。编译器检测本机是否安装，未安装则按 character 回退，不会硬套。"
+        }
+      }
+    },
+
+    "motion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "energy": {
+          "type": "string",
+          "enum": ["calm", "standard", "playful"],
+          "default": "standard",
+          "description": "AI 只给一个词，编译器统一缩放所有模块的时长与弹性。这是保证 Dock hover 和小组件展开『节奏一致』的机制。"
+        },
+        "ambientAnimation": { "type": "boolean", "default": false, "description": "是否启用呼吸/漂浮类常驻动效。耗电，默认关。" }
+      }
+    },
+
+    "wallpaper": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "description": "关键：AI 在这里输出的是【生成指令】而非图片本身。图片由图像模型或素材库另行产出，或直接用程序化渐变/Shader —— 后者零资产、秒出、且天然跟随配色。",
+      "properties": {
+        "kind": { "type": "string", "enum": ["gradient", "shader", "image", "video", "slideshow"] },
+        "imagePrompt": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "kind=image/video 时给图像/视频模型的提示词。必须包含构图约束，例如『中心留白、四周低对比、避免主体占据底部 15%（Dock 区）』—— 这是壁纸与前景不打架的源头治理。"
+        },
+        "negativePrompt": { "type": "string", "maxLength": 300 },
+        "gradientHint": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "kind=gradient 时的构图描述。编译器据此生成 mesh/linear 渐变，色值取自 palette，因此壁纸与 UI 必然同源。",
+          "properties": {
+            "type": { "type": "string", "enum": ["linear", "radial", "conic", "mesh"], "default": "mesh" },
+            "angle": { "type": "number", "default": 160 },
+            "focal": { "type": "string", "enum": ["topLeft", "top", "topRight", "center", "bottomLeft", "bottom", "bottomRight"], "default": "topRight" },
+            "colorRoles": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["primary", "secondary", "accent", "neutral", "surface"] },
+              "default": ["surface", "primary", "accent"]
+            },
+            "animate": { "type": "boolean", "default": false }
+          }
+        },
+        "shaderPreset": {
+          "type": "string",
+          "enum": ["aurora", "flowField", "plasma", "starfield", "waves", "raymarchFog", "gridTunnel", "noiseClouds"],
+          "description": "kind=shader 时从内置 Shader 库选择。Shader 的颜色 uniform 由编译器绑定到 palette，自动跟随主题。不允许 AI 手写 GLSL —— 编译不过、性能不可控、且是安全风险。"
+        },
+        "busyness": {
+          "type": "string",
+          "enum": ["quiet", "moderate", "busy"],
+          "default": "quiet",
+          "description": "画面复杂度预期。编译器据此预设遮罩强度：busy 时自动加大 adaptiveScrim.maxOpacity 与面板模糊。"
+        },
+        "brightnessBias": { "type": "string", "enum": ["dark", "balanced", "bright"], "default": "dark" }
+      }
+    },
+
+    "dock": {
+      "type": "object",
+      "required": ["edge"],
+      "additionalProperties": false,
+      "properties": {
+        "edge": { "type": "string", "enum": ["bottom", "top", "left", "right"], "default": "bottom" },
+        "plateMode": { "type": "string", "enum": ["panel", "separate", "none"], "default": "panel" },
+        "iconTreatment": { "type": "string", "enum": ["original", "monochrome", "duotone", "masked"], "default": "original" },
+        "hoverEffect": { "type": "string", "enum": ["magnify", "lift", "glow", "tilt", "scale", "liquid", "none"], "default": "magnify" },
+        "indicator": { "type": "string", "enum": ["none", "dot", "bar", "glow", "underline", "ring"], "default": "dot" },
+        "labelPolicy": { "type": "string", "enum": ["never", "hover", "always"], "default": "hover" },
+        "autoHide": { "type": "string", "enum": ["never", "always", "onWindowOverlap"], "default": "onWindowOverlap" },
+        "sizeBias": { "type": "string", "enum": ["small", "medium", "large"], "default": "medium" }
+      }
+    },
+
+    "widgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["clock", "calendar", "weather", "systemMonitor", "mediaPlayer", "notes", "todo", "search", "quickLaunch", "photoFrame", "countdown"] },
+          "maxItems": 6,
+          "description": "建议的小组件清单。AI 不指定精确坐标 —— 让 AI 摆栅格坐标基本必然重叠。它只给『集合 + 分布倾向』，由编译器的布局求解器做无重叠打包。"
+        },
+        "arrangement": {
+          "type": "string",
+          "enum": ["clusterTopLeft", "clusterTopRight", "clusterBottomLeft", "clusterBottomRight", "sidebarLeft", "sidebarRight", "topBanner", "scattered", "centered"],
+          "default": "clusterTopRight"
+        },
+        "hero": {
+          "type": "string",
+          "description": "视觉主角组件的 type，会被放大并优先占据 arrangement 的核心位。例如极简主题里的巨型时钟。"
+        },
+        "chromeless": { "type": "boolean", "default": false }
+      }
+    },
+
+    "desktop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "iconVisibility": { "type": "string", "enum": ["all", "none", "rules", "onHover", "onDoubleClick"], "default": "all" },
+        "zoneStrategy": {
+          "type": "string",
+          "enum": ["none", "byType", "byProject", "byFrequency", "custom"],
+          "default": "none",
+          "description": "byType=按文件类型分区；byProject=AI 读取文件名做语义分组（唯一真正需要 AI 智能的整理策略）。"
+        },
+        "suggestedZones": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "required": ["title"],
+            "additionalProperties": false,
+            "properties": {
+              "title": { "type": "string", "maxLength": 12 },
+              "extensions": { "type": "array", "items": { "type": "string" } },
+              "nameRegex": { "type": "string" },
+              "note": { "type": "string", "description": "给用户看的分区理由。" }
+            }
+          }
+        },
+        "iconLabelProtection": { "type": "string", "enum": ["none", "shadow", "outline", "pill", "auto"], "default": "auto" }
+      }
+    },
+
+    "overrides": {
+      "type": "object",
+      "description": "逃生口：允许 AI 直接写 theme.json 的片段做精细控制。key 为 JSON Pointer（如 /tokens/material/dockPlate/blurRadius）。编译器在展开后应用，随后仍要过完整校验管线 —— 逃生口不能绕过对比度与性能闸门。生成时应尽量少用，超过 8 条视为 AI 在滥用，编译器会告警。",
+      "additionalProperties": true,
+      "maxProperties": 20
+    }
+  }
+}

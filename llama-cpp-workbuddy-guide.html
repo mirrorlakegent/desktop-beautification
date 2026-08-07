@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>llama.cpp + WorkBuddy 本地模型配置指南</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f5f5f0; color: #2c2c2a; line-height: 1.7; padding: 24px; max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; color: #26215c; }
+  .subtitle { color: #5f5e5a; font-size: 14px; margin-bottom: 28px; }
+  h2 { font-size: 18px; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: #0f6e56; border-bottom: 2px solid #e1f5ee; padding-bottom: 6px; }
+  h3 { font-size: 15px; font-weight: 500; margin-top: 20px; margin-bottom: 8px; color: #185fa5; }
+  p { margin-bottom: 12px; font-size: 14px; }
+  code { font-family: "Cascadia Code", Consolas, monospace; background: #eeedfe; color: #3c3489; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  pre { background: #2c2c2a; color: #e1f5ee; padding: 16px 20px; border-radius: 10px; overflow-x: auto; margin: 12px 0; font-size: 13px; line-height: 1.5; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .cmd { color: #5dcaa5; }
+  .flag { color: #f4c0d1; }
+  .str { color: #fac775; }
+  .cmt { color: #888780; font-style: italic; }
+  .note { background: #e6f1fb; border-left: 4px solid #378add; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .warn { background: #faecec; border-left: 4px solid #d85a30; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .tip { background: #e1f5ee; border-left: 4px solid #0f6e56; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .ok { background: #e1f5ee; border-left: 4px solid #0f6e56; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .step { display: flex; gap: 12px; margin: 16px 0; }
+  .step-num { flex-shrink: 0; width: 28px; height: 28px; background: #534ab7; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
+  .step-content { flex: 1; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th { background: #f1efe8; padding: 8px 12px; text-align: left; font-weight: 500; border-bottom: 2px solid #b4b2a9; }
+  td { padding: 8px 12px; border-bottom: 1px solid #d3d1c7; }
+  tr:hover td { background: #f9f8f4; }
+  .config-card { background: #fff; border: 1px solid #d3d1c7; border-radius: 12px; padding: 20px; margin: 16px 0; }
+  .config-card h3 { margin-top: 0; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+  .badge-green { background: #e1f5ee; color: #0f6e56; }
+  .badge-blue { background: #e6f1fb; color: #185fa5; }
+  .badge-purple { background: #eeedfe; color: #534ab7; }
+  .badge-amber { background: #faeeda; color: #854f0b; }
+  hr { border: none; border-top: 1px solid #d3d1c7; margin: 28px 0; }
+  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d3d1c7; font-size: 12px; color: #888780; text-align: center; }
+  .perf-table th { background: #26215c; color: #fff; }
+  .perf-table .highlight { background: #e1f5ee; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>llama.cpp + WorkBuddy 本地模型配置指南</h1>
+<p class="subtitle">Windows + NVIDIA RTX 2070 8GB &middot; CUDA 加速 &middot; 已验证可用</p>
+
+<div class="ok">
+<strong>当前状态：已配置完成并通过测试</strong><br>
+模型：Qwen2.5-7B-Instruct Q4_K_M (4.36 GB) &middot; CUDA 后端正常 &middot; 生成速度 ~34 tok/s &middot; Prompt 处理 ~1500 tok/s
+</div>
+
+<h2>当前配置概览</h2>
+
+<table>
+  <tr><th>项目</th><th>值</th></tr>
+  <tr><td>llama.cpp 路径</td><td><code>D:\llama\</code></td></tr>
+  <tr><td>模型文件</td><td><code>D:\llama\models\qwen2.5-7b-instruct-q4_k_m.gguf</code> (4.36 GB)</td></tr>
+  <tr><td>启动脚本</td><td><code>D:\llama\启动7B模型-RTX2070优化.bat</code></td></tr>
+  <tr><td>GPU</td><td>NVIDIA GeForce RTX 2070 with Max-Q Design (8191 MiB VRAM)</td></tr>
+  <tr><td>CUDA 后端</td><td><span class="badge badge-green">已加载</span> ggml-cuda.dll + cublas64_12.dll + cudart64_12.dll</td></tr>
+  <tr><td>VRAM 占用</td><td>~7.5 GB / 8 GB (模型 4.4GB + KV缓存 ~2GB + 开销)</td></tr>
+</table>
+
+<h2>启动方法</h2>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <p>双击运行启动脚本：</p>
+    <pre><code>D:\llama\启动7B模型-RTX2070优化.bat</code></pre>
+    <p>等待约 10-15 秒，看到 <code>llama_server: listening</code> 表示启动成功。</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <p>在 WorkBuddy 中切换到自定义模型即可开始对话。</p>
+    <div class="tip">
+      <strong>验证服务：</strong>浏览器打开 <code>http://127.0.0.1:8080</code> 可看到聊天测试界面。
+    </div>
+  </div>
+</div>
+
+<h2>启动脚本内容</h2>
+
+<pre><code><span class="cmt">:: D:\llama\启动7B模型-RTX2070优化.bat</span>
+@echo off
+chcp 65001 &gt;nul
+title Qwen2.5-7B-Instruct (RTX 2070 优化版)
+cd /d "%~dp0"
+
+llama-server.exe ^
+    -m "models\qwen2.5-7b-instruct-q4_k_m.gguf" ^
+    -ngl 99 ^
+    -c 65536 ^
+    -n 8192 ^
+    --cache-type-k q8_0 ^
+    --cache-type-v q8_0 ^
+    --flash-attn on ^
+    --no-repack ^
+    -np 1 ^
+    --host 127.0.0.1 ^
+    --port 8080
+pause</code></pre>
+
+<h3>参数说明</h3>
+<table>
+  <tr><th>参数</th><th>含义</th><th>为什么这样设</th></tr>
+  <tr><td><code>-ngl 99</code></td><td>全部层卸载到 GPU</td><td>7B 模型 4.36GB 完全放入 8GB 显存</td></tr>
+  <tr><td><code>-c 65536</code></td><td>上下文窗口 65536 tokens</td><td>WorkBuddy 请求约 50K tokens，需大于此值</td></tr>
+  <tr><td><code>-n 8192</code></td><td>最大生成 8192 tokens</td><td>足够长的回复</td></tr>
+  <tr><td><code>--cache-type-k/v q8_0</code></td><td>KV 缓存 Q8 量化</td><td>节省约 50% 显存，几乎不影响质量</td></tr>
+  <tr><td><code>--flash-attn on</code></td><td>Flash Attention</td><td>长上下文 prompt 处理速度提升 2 倍</td></tr>
+  <tr><td><code>--no-repack</code></td><td>禁用 CPU 权重重排</td><td>GPU-only 模式不需要，避免 3GB 额外内存占用</td></tr>
+  <tr><td><code>-np 1</code></td><td>单并行槽</td><td>独占显存给单个请求，避免多槽争抢</td></tr>
+</table>
+
+<h2>WorkBuddy 配置参数</h2>
+
+<div class="config-card">
+  <h3>自定义模型设置</h3>
+  <table>
+    <tr><th>配置项</th><th>填写值</th></tr>
+    <tr><td>接口地址 (Base URL)</td><td><code>http://127.0.0.1:8080/v1</code></td></tr>
+    <tr><td>API Key</td><td><code>sk-local</code>（随便填，绕过校验）</td></tr>
+    <tr><td>模型名称 (Model ID)</td><td><code>qwen2.5-7b-instruct</code></td></tr>
+    <tr><td>输入上下文</td><td><code>65536</code></td></tr>
+    <tr><td>输出上下文</td><td><code>8192</code></td></tr>
+  </table>
+</div>
+
+<div class="warn">
+<strong>重要：</strong>输入上下文必须设为 <code>65536</code>（与启动脚本的 <code>-c</code> 一致），否则会报 "exceeds context size" 错误。
+</div>
+
+<h2>性能基准测试结果</h2>
+
+<table class="perf-table">
+  <tr><th>测试项</th><th>CPU 模式（修复前）</th><th>CUDA 模式（修复后）</th><th>提升</th></tr>
+  <tr><td>Prompt 处理 (pp256)</td><td>~100 t/s</td><td class="highlight">861 t/s</td><td>8.6x</td></tr>
+  <tr><td>文本生成 (tg128)</td><td>7 t/s</td><td class="highlight">34 t/s</td><td>4.9x</td></tr>
+  <tr><td>15K token 请求</td><td>~150s (超时)</td><td class="highlight">10s</td><td>15x</td></tr>
+  <tr><td>50K token 请求（推算）</td><td>~500s (超时)</td><td class="highlight">~33s</td><td>15x</td></tr>
+</table>
+
+<div class="note">
+<strong>Flash Attention 效果：</strong>开启后 15K token 处理从 21s 降到 10s（1495 tok/s），且重复请求可命中 KV 缓存，仅需 0.12s。
+</div>
+
+<h2>CUDA 修复记录（已解决）</h2>
+
+<div class="warn">
+<strong>问题：</strong>ggml-cuda.dll (564MB) 无法加载，llama-bench 只识别 CPU 后端，WorkBuddy 请求超时无响应。
+</div>
+
+<p><strong>根本原因：</strong>系统未安装 CUDA Toolkit，缺少 <code>cublas64_12.dll</code> 和 <code>cublasLt64_12.dll</code>。</p>
+
+<p><strong>修复步骤：</strong></p>
+<ol style="margin-left: 20px; font-size: 14px;">
+  <li>用 pefile 分析 ggml-cuda.dll 导入表，确认缺少 cublas64_12.dll</li>
+  <li>从清华 PyPI 镜像安装 nvidia-cublas-cu12（553MB，9 秒下完）：<br>
+    <code>pip install nvidia-cublas-cu12 -i https://pypi.tuna.tsinghua.edu.cn/simple --no-deps --target C:\cuda_dlls_temp</code></li>
+  <li>提取 DLL 文件复制到 <code>D:\llama\</code>：<br>
+    <code>cublas64_12.dll</code> (102 MB) + <code>cublasLt64_12.dll</code> (668 MB)</li>
+  <li>验证：<code>ggml-cuda.dll</code> 加载成功，CUDA 后端正常</li>
+</ol>
+
+<div class="tip">
+<strong>清理提示：</strong>临时目录 <code>C:\Users\USER\cuda_dlls_temp</code>（约 770MB）可手动删除以回收磁盘空间。
+</div>
+
+<h2>常见问题</h2>
+
+<h3>Q: 启动后对话没有回应</h3>
+<p>检查命令行窗口是否出现 <code>CUDA0</code> 字样。如果只看到 <code>CPU</code> 后端，说明 CUDA 未加载——检查 <code>cublas64_12.dll</code> 和 <code>cudart64_12.dll</code> 是否在 <code>D:\llama\</code> 目录中。</p>
+
+<h3>Q: 报错 "failed to allocate CPU_REPACK buffer"</h3>
+<p>系统内存不足导致 CPU 权重重排失败。启动脚本已包含 <code>--no-repack</code> 参数禁用此功能（GPU 模式下不需要）。如果仍报错，关闭一些占内存的程序后重试。</p>
+
+<h3>Q: 报错 "exceeds the available context size"</h3>
+<p>WorkBuddy 发送的请求约 50K tokens，上下文必须设为 <code>-c 65536</code>。同时在 WorkBuddy 模型设置中将「输入上下文」也设为 <code>65536</code>。</p>
+
+<h3>Q: 显存不够 (OOM)</h3>
+<p>当前配置已优化：模型 4.36GB + KV 缓存（Q8 量化）~2GB = ~6.4GB，加上 CUDA 开销约 7.5GB，刚好在 8GB 内。如果仍 OOM，可将 <code>-c</code> 降到 32768。</p>
+
+<h3>Q: 首次对话很慢，后续很快</h3>
+<p>首次请求需要处理完整 system prompt（约 50K tokens），耗时约 30-60 秒。后续请求可命中 KV 缓存，仅需数秒。这是正常行为。</p>
+
+<h3>Q: 想换更强的模型</h3>
+<p>RTX 2070 8GB 显存上限：7B Q4_K_M (4.4GB) 是最佳选择。14B Q3 约 6.8GB 会挤满显存导致上下文不足。如需更强模型，建议升级到 12GB+ 显存的 GPU。</p>
+
+<h3>Q: 关闭窗口后服务断开</h3>
+<p>命令行窗口必须保持开启。可以最小化但不能关闭。如需后台运行，可用 <code>pythonw</code> 或 Windows 任务计划程序。</p>
+
+<hr>
+
+<h2>D:\llama 目录关键文件</h2>
+
+<table>
+  <tr><th>文件</th><th>大小</th><th>用途</th></tr>
+  <tr><td><code>llama-server.exe</code></td><td>~1.2 MB</td><td>OpenAI 兼容 API 服务</td></tr>
+  <tr><td><code>ggml-cuda.dll</code></td><td>564 MB</td><td>CUDA 后端（GPU 加速核心）</td></tr>
+  <tr><td><code>cublas64_12.dll</code></td><td>102 MB</td><td>cuBLAS 线性代数库（CUDA 依赖）</td></tr>
+  <tr><td><code>cublasLt64_12.dll</code></td><td>668 MB</td><td>cuBLASLt 轻量运算库</td></tr>
+  <tr><td><code>cudart64_12.dll</code></td><td>0.6 MB</td><td>CUDA 运行时</td></tr>
+  <tr><td><code>models\qwen2.5-7b-instruct-q4_k_m.gguf</code></td><td>4.36 GB</td><td>Qwen2.5 7B 模型文件</td></tr>
+</table>
+
+<div class="footer">
+  llama.cpp + WorkBuddy 配置指南 &middot; RTX 2070 8GB &middot; CUDA 已修复 &middot; 2026-08-07 更新
+</div>
+
+</body>
+</html>

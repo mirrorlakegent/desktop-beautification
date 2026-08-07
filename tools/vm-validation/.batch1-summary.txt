@@ -1,0 +1,5 @@
+﻿V1 | PASS | 
+V5 | BLOCKED | 部分自动（复选框↔现实↔意图 已验），托盘文案三态与双闪视觉判据需人工
+V10 | BLOCKED | 成功态与并发态反馈已自动核对；过渡文案与卡死判据需人工
+V8 | PASS | 
+V6 | FAIL | 「专注」Status 无失败说明: high：应用场景失败：专注 —— mpv.exe was not found. Copy mpv.exe into the app output folder (C:\gstack\app\) or add it to PATH.（设置已回滚）（若 settings 只回滚一部分则升级为 critical，请核对 v6 状态 JSON） ｜ 「专注」ActiveSceneName 一致: ActiveSceneName 期望 专注，实际  ｜ 「演示」Status 无失败说明: high：应用场景失败：演示 —— mpv.exe was not found. Copy mpv.exe into the app output folder (C:\gstack\app\) or add it to PATH.（设置已回滚）（若 settings 只回滚一部分则升级为 critical，请核对 v6 状态 JSON） ｜ 「演示」ActiveSceneName 一致: ActiveSceneName 期望 演示，实际 
