@@ -27,6 +27,7 @@ tools/vm-validation/evidence/
 *.log
 _*.txt
 _*.ps1
+_*.json
 _*.log
 *.tmp
 _*/
