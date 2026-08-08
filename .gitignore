@@ -1,8 +1,12 @@
 # ============================================================
 # .NET build outputs (compiled binaries, obj trees)
-# NOTE: keep src/DesktopSuite/mpv.exe — it is a SOURCE asset
-#       (copied into the publish package at build time).
+# NOTE: src/DesktopSuite/mpv.exe is a ~112MB binary and is NOT
+#       tracked in git — it exceeds GitHub's 100MB hard limit and
+#       Gitee free tier has no Git LFS. It is provided locally and
+#       fetched/copied into the publish package at build time.
+#       See Publish-SelfContained.ps1 (mpv bootstrap) for sourcing.
 # ============================================================
+src/DesktopSuite/mpv.exe
 **/bin/
 **/obj/
 *.dll

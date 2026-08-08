@@ -99,6 +99,44 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error ("[publish] dotnet publish failed (exit=" + $LASTEXITCODE + ").")
 }
 
+# --- 3b. mpv.exe bootstrap (112MB binary, NOT tracked in git) ---
+# GitHub caps a single file at 100MB and Gitee free has no Git LFS, so mpv.exe
+# lives outside version control. Source it at build time via `$MPV_EXE_URL`
+# (download) or `$MPV_EXE_LOCAL` (copy from a local path); otherwise the package
+# is still valid but lacks media rendering, and we only warn.
+$mpvDest   = Join-Path $OutputDir 'mpv.exe'
+$mpvUrl    = $env:MPV_EXE_URL
+$mpvLocal  = $env:MPV_EXE_LOCAL
+if (-not (Test-Path -LiteralPath $mpvDest)) {
+    $fetched = $false
+    if ($mpvUrl) {
+        try {
+            Write-Output ("[publish] Fetching mpv.exe from `$MPV_EXE_URL ...")
+            Invoke-WebRequest -Uri $mpvUrl -OutFile $mpvDest -ErrorAction Stop
+            $fetched = $true
+        } catch {
+            Write-Output ("[publish] WARN: download mpv.exe failed: " + $_.Exception.Message)
+        }
+    }
+    if (-not $fetched -and $mpvLocal -and (Test-Path -LiteralPath $mpvLocal)) {
+        try {
+            Copy-Item -LiteralPath $mpvLocal -Destination $mpvDest -Force
+            $fetched = $true
+            Write-Output ("[publish] Copied mpv.exe from `$MPV_EXE_LOCAL.")
+        } catch {
+            Write-Output ("[publish] WARN: copy mpv.exe failed: " + $_.Exception.Message)
+        }
+    }
+    if ($fetched) {
+        $mb = [math]::Round((Get-Item $mpvDest).Length / 1MB, 1)
+        Write-Output ("[publish] mpv.exe present (" + $mb + "MB).")
+    } else {
+        Write-Output "[publish] WARNING: mpv.exe missing from package -> media rendering unavailable."
+        Write-Output "[publish]          Source it via `$MPV_EXE_URL / `$MPV_EXE_LOCAL, or copy manually to:"
+        Write-Output ("[publish]          " + $mpvDest)
+    }
+}
+
 # --- 4. Artifact validation gate (prevents framework-dependent mis-deploy) ---
 if (-not $SkipVerify) {
     $required = @(
@@ -109,8 +147,7 @@ if (-not $SkipVerify) {
         @{ Name = 'hostfxr.dll';              Role = '.NET host fxr' },
         @{ Name = 'hostpolicy.dll';           Role = '.NET host policy' },
         @{ Name = 'DirectWriteForwarder.dll'; Role = 'WPF native' },
-        @{ Name = 'D3DCompiler_47_cor3.dll';  Role = 'WPF native' },
-        @{ Name = 'mpv.exe';                  Role = 'media renderer' }
+        @{ Name = 'D3DCompiler_47_cor3.dll';  Role = 'WPF native' }
     )
 
     Write-Output "[publish] Validating artifacts (self-contained gate)..."
