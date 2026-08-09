@@ -91,6 +91,19 @@ public sealed class WorkerWHost : IDisposable
     private IntPtr Commit(IntPtr hwnd, string how)
     {
         NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOW);
+
+        // (A) Z-order fix: pin the wallpaper surface to the very BOTTOM of the desktop z-order so it
+        // can never rise above the icon layer — and therefore can never cover the Fences layer, which
+        // is mounted above the icons. Some shell shapes land the 0x052C-spawned WorkerW on top, which
+        // made the (opaque, full-screen) wallpaper occlude the fence; this makes the intended
+        // "wallpaper behind everything" ordering explicit and stable.
+        try
+        {
+            NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_BOTTOM, 0, 0, 0, 0,
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE);
+        }
+        catch { }
+
         _target = hwnd;
         Strategy = how;
         NativeMethods.GetWindowRect(hwnd, out var r);

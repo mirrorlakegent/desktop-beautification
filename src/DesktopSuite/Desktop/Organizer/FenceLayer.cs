@@ -171,6 +171,22 @@ public sealed class FenceLayer
             // Build once DPI/origin are known, then clip + show.
             BuildBoxes(_items);
             ApplyRegion();
+
+            // (A) Z-order fix: pin the fence to the TOP of its desktop host so it sits above the
+            // native icon layer and is never hidden behind the desktop shell. The wallpaper surface
+            // is pinned to HWND_BOTTOM in WorkerWHost, so this also guarantees the fence renders
+            // ABOVE the wallpaper. HWND_TOP here only reorders among the host's own children, so
+            // normal top-level app windows stay above the fence. This removes the prior reliance on
+            // "new child window lands on top" — the ordering is now explicit and stable.
+            try
+            {
+                NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0, w, h,
+                    NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("FenceLayer：置顶失败", ex);
+            }
         }
         catch (Exception ex)
         {
