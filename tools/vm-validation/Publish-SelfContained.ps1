@@ -103,6 +103,12 @@ if ($LASTEXITCODE -ne 0) {
 # mpv.exe is a ~112MB binary that cannot enter git (GitHub 100MB/file limit; Gitee
 # free has no Git LFS). It is published as a GitHub Release asset instead.
 #
+# NOTE on Gitee hosting: mpv.exe (~112MB) exceeds the Gitee free-tier attachment
+# cap (~100MB), so it cannot be hosted directly on Gitee. If a mirror fallback is
+# needed, set $FallbackMpvUrl below to a working direct link (object storage / CDN
+# / another GitHub source, etc.). The maintainer will backfill this constant after
+# verifying which mirrors are reachable in the target environment.
+#
 # Default source: GitHub Release tag `vendor/mpv-v1` (repo desktop-beautification),
 # asset mpv.exe. `$ExpectedMpvSha256` is the published-asset hash, pinned for
 # supply-chain integrity so a tampered/incorrect binary can never be shipped.
@@ -111,16 +117,42 @@ if ($LASTEXITCODE -ne 0) {
 #   (a) $env:MPV_EXE_URL   -> download from an arbitrary URL  (highest priority)
 #   (b) $env:MPV_EXE_LOCAL -> copy from a local file path
 #   (c) $DefaultMpvUrl     -> auto-download from the default GitHub Release asset
-# To switch the default source, change the two constants below or set an env var.
-# If ALL of (a)/(b)/(c) fail, the original WARNING is emitted (media rendering
-# unavailable) and the package is left without mpv.exe.
+#       (on failure, if $FallbackMpvUrl is non-empty, retry once via the mirror)
+# To switch the default source, change the constants below or set an env var.
+# If ALL of (a)/(b)/(c)/(fallback) fail, the original WARNING is emitted (media
+# rendering unavailable) and the package is left without mpv.exe.
 $DefaultMpvUrl     = 'https://github.com/mirrorlakegent/desktop-beautification/releases/download/vendor/mpv-v1/mpv.exe'
+$FallbackMpvUrl    = ''   # mirror fallback; set to a reachable direct link if the default source is unreachable (Gitee ~100MB cap blocks direct hosting)
 $ExpectedMpvSha256 = '3ba74e88277e76e830967bea421e63492a43603f6950858b1217cc57c2d1a4e5'
 
 $mpvDest   = Join-Path $OutputDir 'mpv.exe'
 $mpvUrl    = $env:MPV_EXE_URL
 $mpvLocal  = $env:MPV_EXE_LOCAL
-if (-not (Test-Path -LiteralPath $mpvDest)) {
+
+# Unified SHA256 verification: runs whether the binary was just fetched OR was
+# already present in the package. Prevents a tampered/leftover mpv.exe from a
+# previous run from leaking into the release (HARDENING 1).
+function Test-MpvIntegrity {
+    param(
+        [string]$Source = 'existing'
+    )
+    $actualSha   = (Get-FileHash -Algorithm SHA256 -LiteralPath $mpvDest).Hash.ToLower()
+    $expectedSha = $ExpectedMpvSha256.ToLower()
+    if ($actualSha -ne $expectedSha) {
+        # Tampered/incorrect binary: delete (tolerate safe-delete interception)
+        # and abort hard so a corrupted mpv.exe is never deployed.
+        try { Remove-Item -LiteralPath $mpvDest -Force -ErrorAction Stop } catch { }
+        Write-Error ("[publish] mpv.exe SHA256 mismatch (source=" + $Source + "): got " + $actualSha + ", expected " + $expectedSha + ". Binary removed; aborting to avoid shipping a tampered mpv.exe.")
+    }
+    $mb = [math]::Round((Get-Item $mpvDest).Length / 1MB, 1)
+    Write-Output ("[publish] mpv.exe verified (SHA256 OK, " + $mb + "MB).")
+}
+
+if (Test-Path -LiteralPath $mpvDest) {
+    # HARDENING 1: mpv.exe already present -> skip fetch, verify in place.
+    Write-Output "[publish] mpv.exe already present in package -> verifying existing binary..."
+    Test-MpvIntegrity -Source 'existing'
+} else {
     $fetched     = $false
     $fetchSource = ''
 
@@ -148,7 +180,8 @@ if (-not (Test-Path -LiteralPath $mpvDest)) {
         }
     }
 
-    # (c) default auto-download from the pinned GitHub Release asset
+    # (c) default auto-download from the pinned GitHub Release asset, with
+    #     HARDENING 2: optional one-time mirror fallback via $FallbackMpvUrl.
     if (-not $fetched) {
         try {
             Write-Output ("[publish] Fetching mpv.exe from default source `$DefaultMpvUrl ...")
@@ -157,21 +190,22 @@ if (-not (Test-Path -LiteralPath $mpvDest)) {
             $fetchSource = 'DefaultMpvUrl'
         } catch {
             Write-Output ("[publish] WARN: auto-download mpv.exe from default source failed: " + $_.Exception.Message)
+            # HARDENING 2: retry once via mirror fallback, only when configured.
+            if ($FallbackMpvUrl) {
+                try {
+                    Write-Output ("[publish] Retrying mpv.exe from fallback mirror `$FallbackMpvUrl ...")
+                    Invoke-WebRequest -Uri $FallbackMpvUrl -OutFile $mpvDest -ErrorAction Stop
+                    $fetched     = $true
+                    $fetchSource = 'FallbackMpvUrl'
+                } catch {
+                    Write-Output ("[publish] WARN: fallback mirror download also failed: " + $_.Exception.Message)
+                }
+            }
         }
     }
 
     if ($fetched) {
-        # Supply-chain integrity: verify SHA256 before shipping the binary.
-        $actualSha   = (Get-FileHash -Algorithm SHA256 -LiteralPath $mpvDest).Hash.ToLower()
-        $expectedSha = $ExpectedMpvSha256.ToLower()
-        if ($actualSha -ne $expectedSha) {
-            # Tampered/incorrect binary: delete (tolerate safe-delete interception)
-            # and abort hard so a corrupted mpv.exe is never deployed.
-            try { Remove-Item -LiteralPath $mpvDest -Force -ErrorAction Stop } catch { }
-            Write-Error ("[publish] mpv.exe SHA256 mismatch (source=" + $fetchSource + "): got " + $actualSha + ", expected " + $expectedSha + ". Binary removed; aborting to avoid shipping a tampered mpv.exe.")
-        }
-        $mb = [math]::Round((Get-Item $mpvDest).Length / 1MB, 1)
-        Write-Output ("[publish] mpv.exe verified (SHA256 OK, " + $mb + "MB).")
+        Test-MpvIntegrity -Source $fetchSource
     } else {
         Write-Output "[publish] WARNING: mpv.exe missing from package -> media rendering unavailable."
         Write-Output "[publish]          Source it via `$MPV_EXE_URL / `$MPV_EXE_LOCAL, or copy manually to:"
