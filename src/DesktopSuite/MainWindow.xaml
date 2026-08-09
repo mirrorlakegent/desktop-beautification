@@ -60,6 +60,7 @@
 
             <GroupBox Header="桌面整理" Margin="0,0,0,12">
                 <StackPanel Margin="8">
+                    <Button Name="BtnToggleFences" Content="启用桌面整理" Height="36" Margin="0,0,0,8" Click="BtnToggleFences_Click"/>
                     <CheckBox Name="ChkHideIcons" Content="隐藏桌面图标" Margin="0,0,0,6" Checked="ChkHideIcons_Changed" Unchecked="ChkHideIcons_Changed"/>
                     <CheckBox Name="ChkRestoreIconsOnExit" Content="退出时恢复桌面图标（推荐）" Margin="0,0,0,8" Checked="ChkRestoreIcons_Changed" Unchecked="ChkRestoreIcons_Changed"/>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">

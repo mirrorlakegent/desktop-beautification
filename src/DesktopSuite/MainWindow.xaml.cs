@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using DesktopSuite.Desktop;
+using DesktopSuite.Desktop.Organizer;
 using DesktopSuite.Safety;
 using DesktopSuite.Themes;
 using DesktopSuite.Wallpaper;
@@ -22,6 +23,8 @@ public partial class MainWindow : Window
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly IconHider _iconHider = new();
     private readonly DesktopSceneManager _scenes = new();
+    private readonly FenceStore _fenceStore = FenceStore.Current;
+    private FenceLayer? _fenceLayer;
     private TrayManager? _tray;
     private WallpaperRotator? _rotator;
     private bool _uiReady;
@@ -96,6 +99,11 @@ public partial class MainWindow : Window
         // actually applied — with backoff for the case where Explorer is not ready at login yet.
         if (_settings.DesiredIconsHidden)
             ApplyIconsWithRetry(true);
+
+        // ---- Desktop organization (Phase 1+2): Fences ----
+        // If fences were active last session, re-show them (and keep the native icons hidden) on launch.
+        if (_fenceStore.Load().FencesEnabled)
+            ApplyFencesWithRetryIfEnabled();
 
         // The tray icon is the always-available control surface; it persists after the window is
         // closed (we minimise-to-tray, so the GUI process stays alive to own the icon).
@@ -173,6 +181,18 @@ public partial class MainWindow : Window
         _shuttingDown = true;
         // V11A fix: remove the WndProc hook before the window is destroyed.
         try { _hwndSource?.RemoveHook(WndProc); } catch { }
+        // Fences and native icons are mutually exclusive: if fences was active, the native icons are
+        // hidden, so we MUST restore them on exit regardless of the hide-icons feature's own
+        // RestoreIconsOnExit preference (otherwise fences-active + restore-OFF would leave a blank
+        // desktop). This runs before closing the layer; RestoreIconsOnTeardown below still handles
+        // the standalone hide-icons feature and is a no-op for icons once we've restored here.
+        bool wasFences = _fenceLayer != null;
+        if (wasFences)
+        {
+            try { _iconHider.ApplyDetailed(false); } catch { }
+        }
+        // Close the fences layer (it owns a desktop child window / region) before we tear down.
+        try { _fenceLayer?.Close(); _fenceLayer = null; } catch { }
         RestoreIconsOnTeardown("窗口关闭");
         _rotator?.Dispose();
         _tray?.Dispose();
@@ -575,6 +595,133 @@ public partial class MainWindow : Window
             return;
         }
         RunIconApply(current != IconVisibility.Hidden);
+    }
+
+    // ---- Desktop organization (Phase 1+2): Fences (icon virtualization) ----
+
+    /// <summary>Button handler for the desktop-tidy toggle.</summary>
+    private void BtnToggleFences_Click(object sender, RoutedEventArgs e) => ToggleFences();
+
+    /// <summary>
+    /// Enable / disable the Fences layer. Fences and native icons are mutually exclusive: enabling
+    /// hides the native desktop icons; disabling restores them. The shell work (icon hide/show) runs
+    /// on the thread pool (P1-6); only the cheap UI sync + window creation marshals back to the
+    /// Dispatcher. Every shell call is wrapped so a missing shell never throws into the UI thread.
+    /// </summary>
+    private void ToggleFences()
+    {
+        if (System.Threading.Interlocked.CompareExchange(ref _desktopBusy, 1, 0) != 0)
+        {
+            Status.Text = "桌面操作正在进行中，请稍候…";
+            return;
+        }
+
+        bool enable = _fenceLayer == null;
+        Status.Text = enable ? "正在启用桌面整理…" : "正在停用桌面整理…";
+
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            IconApplyResult? iconResult = null;
+            try
+            {
+                // Hide native icons when enabling, restore when disabling.
+                iconResult = _iconHider.ApplyDetailed(enable);
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("Fences 图标切换异常", ex);
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _desktopBusy, 0);
+            }
+
+            if (_shuttingDown) return;
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_shuttingDown) return;
+                try
+                {
+                    if (enable) EnableFences();
+                    else DisableFences();
+
+                    Status.Text = $"桌面整理已{(enable ? "启用" : "停用")}" +
+                        (iconResult is { } r && !r.Success ? $"（图标状态：{r.Describe()}）" : "");
+                }
+                catch (Exception ex)
+                {
+                    HostLog.Write("ToggleFences UI 阶段异常", ex);
+                    Status.Text = $"桌面整理切换失败：{ex.Message}";
+                }
+            });
+        });
+    }
+
+    /// <summary>Show the fences layer on the UI thread (enumerates + classifies the desktop).</summary>
+    private void EnableFences()
+    {
+        var layout = _fenceStore.Load();
+        var items = DesktopItemEnumerator.Enumerate();
+        FenceClassifier.Apply(items, layout.Categories, layout.Overrides);
+        _fenceLayer = new FenceLayer();
+        _fenceLayer.Show(items.ToArray(), layout);
+        layout.FencesEnabled = true;
+        _fenceStore.Save(layout);
+        if (BtnToggleFences != null) BtnToggleFences.Content = "停用桌面整理";
+    }
+
+    /// <summary>Close the fences layer on the UI thread and persist the disabled state.</summary>
+    private void DisableFences()
+    {
+        _fenceLayer?.Close();
+        _fenceLayer = null;
+        var layout = _fenceStore.Load();
+        layout.FencesEnabled = false;
+        _fenceStore.Save(layout);
+        if (BtnToggleFences != null) BtnToggleFences.Content = "启用桌面整理";
+    }
+
+    /// <summary>Re-enable fences on startup (off the UI thread, with backoff) when the last session
+    /// left them active. Mirrors <see cref="ApplyIconsWithRetry"/>; if the native icons cannot be
+    /// hidden we back off and leave fences disabled rather than covering an un-hidden desktop.</summary>
+    private void ApplyFencesWithRetryIfEnabled()
+    {
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            int[] backoff = { 500, 1000, 2000, 4000, 8000 };
+            for (int attempt = 0; attempt <= backoff.Length; attempt++)
+            {
+                IconApplyResult result;
+                try
+                {
+                    result = _iconHider.ApplyDetailed(true);
+                }
+                catch (Exception ex)
+                {
+                    HostLog.Write($"启动应用 Fences 图标隐藏（第 {attempt + 1} 次）异常", ex);
+                    result = new IconApplyResult(IconApplyOutcome.Unknown, IconVisibility.Unknown, "异常");
+                }
+
+                if (result.Success)
+                {
+                    if (!_shuttingDown) Dispatcher.BeginInvoke(() => { if (!_shuttingDown) EnableFences(); });
+                    return;
+                }
+
+                if (attempt == backoff.Length)
+                {
+                    HostLog.Write($"启动应用 Fences 失败：重试 {attempt + 1} 次后仍未生效 —— {result.Describe()}。");
+                    if (!_shuttingDown) Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_shuttingDown) return;
+                        DisableFences();
+                        Status.Text = $"启动时未能启用桌面整理（图标无法隐藏）—— {result.Describe()}。";
+                    });
+                    return;
+                }
+                System.Threading.Thread.Sleep(backoff[attempt]);
+            }
+        });
     }
 
     /// <summary>Push icon state into the window controls + tray label.</summary>
