@@ -613,10 +613,12 @@ public partial class MainWindow : Window
         if (System.Threading.Interlocked.CompareExchange(ref _desktopBusy, 1, 0) != 0)
         {
             Status.Text = "桌面操作正在进行中，请稍候…";
+            HostLog.Write("ToggleFences：跳过（桌面操作忙，_desktopBusy=1）。");
             return;
         }
 
         bool enable = _fenceLayer == null;
+        HostLog.Write($"ToggleFences：入口 enable={enable} _fenceLayer={( _fenceLayer == null ? "null" : "set")}");
         Status.Text = enable ? "正在启用桌面整理…" : "正在停用桌面整理…";
 
         System.Threading.ThreadPool.QueueUserWorkItem(_ =>
@@ -636,10 +638,18 @@ public partial class MainWindow : Window
                 System.Threading.Interlocked.Exchange(ref _desktopBusy, 0);
             }
 
-            if (_shuttingDown) return;
+            if (_shuttingDown)
+            {
+                HostLog.Write("ToggleFences：UI 回调未调度（_shuttingDown）。");
+                return;
+            }
             Dispatcher.BeginInvoke(() =>
             {
-                if (_shuttingDown) return;
+                if (_shuttingDown)
+                {
+                    HostLog.Write("ToggleFences：UI 回调被跳过（_shuttingDown）。");
+                    return;
+                }
                 try
                 {
                     if (enable) EnableFences();
@@ -663,16 +673,20 @@ public partial class MainWindow : Window
         var layout = _fenceStore.Load();
         var items = DesktopItemEnumerator.Enumerate();
         FenceClassifier.Apply(items, layout.Categories, layout.Overrides);
+        HostLog.Write($"EnableFences：入口 items={items.Count} categories={layout.Categories.Count} FencesEnabled(旧)={layout.FencesEnabled}");
         _fenceLayer = new FenceLayer();
         _fenceLayer.Show(items.ToArray(), layout);
+        HostLog.Write("EnableFences：_fenceLayer.Show 已调用（窗口创建结果见 FenceLayer 日志）。");
         layout.FencesEnabled = true;
         _fenceStore.Save(layout);
         if (BtnToggleFences != null) BtnToggleFences.Content = "停用桌面整理";
+        HostLog.Write("EnableFences：完成，桌面整理已启用。");
     }
 
     /// <summary>Close the fences layer on the UI thread and persist the disabled state.</summary>
     private void DisableFences()
     {
+        HostLog.Write($"DisableFences：入口 _fenceLayer={( _fenceLayer == null ? "null" : "set")}");
         _fenceLayer?.Close();
         _fenceLayer = null;
         var layout = _fenceStore.Load();
@@ -704,6 +718,7 @@ public partial class MainWindow : Window
 
                 if (result.Success)
                 {
+                    HostLog.Write("启动应用 Fences：图标已隐藏，调度 EnableFences（UI 线程）。");
                     if (!_shuttingDown) Dispatcher.BeginInvoke(() => { if (!_shuttingDown) EnableFences(); });
                     return;
                 }
