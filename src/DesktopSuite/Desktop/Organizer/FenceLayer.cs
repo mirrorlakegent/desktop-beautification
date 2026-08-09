@@ -59,8 +59,17 @@ public sealed class FenceLayer : Window
     public FenceLayer()
     {
         WindowStyle = WindowStyle.None;
-        AllowsTransparency = true;
-        Background = Brushes.Transparent;
+        // Fences is mounted as a CHILD of the desktop shell (see MountToDesktop -> SetParent).
+        // A WS_EX_LAYERED window that is reparented to become a child is NOT painted by DWM, which
+        // is exactly why the boxes never appeared while the native icons were correctly hidden.
+        // The proven pattern in this codebase (WorkerWHost) is a normal non-layered borderless window,
+        // so we must NOT use AllowsTransparency here.
+        AllowsTransparency = false;
+        // Opaque dark background. Because ApplyRegion() clips the window (via SetWindowRgn) to the
+        // union of box rectangles, this brush only ever shows inside a box — and the box paints over
+        // it — so it is effectively invisible. A non-layered window has no alpha channel, so
+        // Brushes.Transparent would render as solid BLACK behind the boxes (the original bug).
+        Background = new SolidColorBrush(Color.FromRgb(20, 22, 28));
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
         Topmost = false;
@@ -92,7 +101,10 @@ public sealed class FenceLayer : Window
         {
             Width = 160,
             Height = 48,
-            Background = new SolidColorBrush(Color.FromArgb(60, 40, 44, 54)),
+            // Opaque now: under the non-layered window (AllowsTransparency=false) there is no alpha
+            // channel, so the old alpha=60 semi-transparent brush would render as a faint/black tile.
+            // Drop the alpha; the opaque dark tone matches FenceBox panels.
+            Background = new SolidColorBrush(Color.FromRgb(40, 44, 54)),
             BorderBrush = new SolidColorBrush(Color.FromArgb(140, 120, 130, 150)),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
@@ -294,6 +306,31 @@ public sealed class FenceLayer : Window
                 {
                     FenceNative.CombineRgn(combined.Value, combined.Value, rgn, FenceNative.RGN_OR);
                     FenceNative.DeleteObject(rgn);
+                }
+            }
+
+            // Add the "＋ 新建分类" tile to the hit region so it is both visible AND clickable.
+            // The tile sits outside the box union (placed at maxRight+30), so without this it was
+            // clipped out by SetWindowRgn and every click on it fell through to the desktop.
+            // Same physical-coordinate basis as the boxes: region coords are physical pixels relative
+            // to the virtual origin, and the tile's Canvas position is already in logical units.
+            double tlx = Canvas.GetLeft(_addTile);
+            double tly = Canvas.GetTop(_addTile);
+            if (!double.IsNaN(tlx) && !double.IsNaN(tly))
+            {
+                int tl = (int)Math.Round(tlx * _dpiX);
+                int tt = (int)Math.Round(tly * _dpiY);
+                int tr = tl + (int)Math.Round(_addTile.Width * _dpiX);
+                int tb = tt + (int)Math.Round(_addTile.Height * _dpiY);
+                IntPtr trgn = FenceNative.CreateRectRgn(tl, tt, tr, tb);
+                if (trgn != IntPtr.Zero)
+                {
+                    if (combined == null) combined = trgn;
+                    else
+                    {
+                        FenceNative.CombineRgn(combined.Value, combined.Value, trgn, FenceNative.RGN_OR);
+                        FenceNative.DeleteObject(trgn);
+                    }
                 }
             }
 

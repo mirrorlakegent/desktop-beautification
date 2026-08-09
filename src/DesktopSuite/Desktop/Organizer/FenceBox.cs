@@ -49,7 +49,7 @@ public sealed class FenceBox : UserControl
 
         var root = new Grid
         {
-            Background = new SolidColorBrush(Color.FromArgb(150, 20, 22, 28))
+            Background = new SolidColorBrush(Color.FromRgb(20, 22, 28))
         };
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) }); // header
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // body
@@ -57,7 +57,7 @@ public sealed class FenceBox : UserControl
         // ---- Header (drag handle + rename target + collapse button) ----
         var header = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(200, 40, 44, 54)),
+            Background = new SolidColorBrush(Color.FromRgb(40, 44, 54)),
             Padding = new Thickness(6, 2, 6, 2)
         };
         header.PreviewMouseLeftButtonDown += (s, e) => _owner.BeginBoxDrag(this, e);
