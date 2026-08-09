@@ -10,30 +10,51 @@ using DesktopSuite.Wallpaper;
 namespace DesktopSuite.Desktop.Organizer;
 
 /// <summary>
-/// The transparent, click-through window that hosts the fence boxes.
+/// The transparent, click-through container that hosts the fence boxes.
 ///
-/// Layout model (chosen for Phase 2/3 simplicity, per the design brief):
-///  - The window covers the ENTIRE virtual screen (Left/Top/Width/Height from
-///    <see cref="SystemParameters"/>, which are DPI-correct logical units).
+/// IMPORTANT (root-cause fix, 2025): this used to be a WPF <see cref="Window"/> that was created
+/// top-level and then re-parented onto the desktop shell via <c>SetParent</c> (MountToDesktop). That
+/// pattern is unreliable: a WPF <see cref="Window"/>'s <c>HwndTarget</c> is initialised for a TOP-LEVEL
+/// window, and once it is turned into a child of the shell, DWM frequently refuses to composite its
+/// content — the window is created (icons are correctly hidden) but it never paints, so the desktop
+/// goes blank with no fence boxes. The previous "AllowsTransparency=false" change only mattered for
+/// layered windows and did NOT fix this, which is exactly why the symptom persisted.
+///
+/// The fix mirrors the ALREADY-PROVEN wallpaper path (<c>WallpaperChildWindow</c>): instead of
+/// re-parenting a WPF Window, we host the WPF visual tree in a RAW child window of the desktop shell
+/// via <see cref="HwndSource"/>. The window is created AS a child of the desktop host from the start
+/// (never re-parented), so DWM composites it normally and the boxes appear above the (hidden) icons.
+///
+/// Layout model:
+///  - The child window is sized to the desktop host's client rect and placed at (0,0).
 ///  - A single <see cref="Canvas"/> fills the window; each box is placed at
 ///    (VirtualToLogical(Category.X), VirtualToLogical(Category.Y)).
 ///  - Click-through is achieved with <see cref="FenceNative.SetWindowRgn"/>: the union of every box's
-///    rectangle (minus any collapsed box's body) is applied to the window, so clicks outside any box
-///    fall through to the native desktop; clicks on a box hit the window (double-click opens files,
-///    header drag moves the box).
+///    rectangle (minus any collapsed box's body) plus the "＋ 新建分类" tile is applied to the window,
+///    so clicks outside any box fall through to the native desktop; clicks on a box hit the window
+///    (double-click opens files, header drag moves the box).
 ///
 /// Persistence: every user edit mutates <see cref="_layout"/> (the same instance shown by
 /// MainWindow.EnableFences) and calls <see cref="FenceStore.Current"/>.Save — never recreating this
-/// Window. The boxes are rebuilt (cheap Canvas children) on recategorize / add, but the desktop-child
-/// Window itself is created exactly once via <see cref="Show"/>.
+/// container. The boxes are rebuilt (cheap Canvas children) on recategorize / add, but the desktop
+/// child window itself is created exactly once via <see cref="Show"/>.
 ///
 /// Known Phase limitations (unchanged, not regressed): DPI is approximately correct off 96-DPI;
 /// multi-monitor clamping is deferred; no thumbnails; no Source heuristic (so 临时 stays empty).
 /// </summary>
-public sealed class FenceLayer : Window
+public sealed class FenceLayer
 {
+    // Root visual: a dark border that fills the child window; the canvas (with the boxes) sits inside.
+    // The window is non-layered, but ApplyRegion() clips it to the box rectangles, so only the boxes
+    // are ever painted — everything outside the region is not drawn and clicks fall through.
+    private readonly Border _root = new()
+    {
+        Background = new SolidColorBrush(Color.FromRgb(20, 22, 28)),
+        BorderThickness = new Thickness(0)
+    };
     private readonly Canvas _canvas = new() { Background = Brushes.Transparent, ClipToBounds = false };
     private readonly Border _addTile;
+
     private readonly List<(FenceBox Box, FenceCategory Category)> _boxes = new();
 
     private FenceLayout? _layout;
@@ -48,8 +69,10 @@ public sealed class FenceLayer : Window
     private bool _dragArmed;
     private Point _dragOffset;
 
-    // display / DPI change hook
-    private HwndSource? _hwndSourceLayer;
+    // desktop child window (raw HWND hosted by HwndSource)
+    private HwndSource? _source;
+    private IntPtr _hwnd = IntPtr.Zero;
+
     private const uint WM_DISPLAYCHANGE = 0x007E;
     private const uint WM_DPICHANGED = 0x02E0;
 
@@ -58,32 +81,8 @@ public sealed class FenceLayer : Window
 
     public FenceLayer()
     {
-        WindowStyle = WindowStyle.None;
-        // Fences is mounted as a CHILD of the desktop shell (see MountToDesktop -> SetParent).
-        // A WS_EX_LAYERED window that is reparented to become a child is NOT painted by DWM, which
-        // is exactly why the boxes never appeared while the native icons were correctly hidden.
-        // The proven pattern in this codebase (WorkerWHost) is a normal non-layered borderless window,
-        // so we must NOT use AllowsTransparency here.
-        AllowsTransparency = false;
-        // Opaque dark background. Because ApplyRegion() clips the window (via SetWindowRgn) to the
-        // union of box rectangles, this brush only ever shows inside a box — and the box paints over
-        // it — so it is effectively invisible. A non-layered window has no alpha channel, so
-        // Brushes.Transparent would render as solid BLACK behind the boxes (the original bug).
-        Background = new SolidColorBrush(Color.FromRgb(20, 22, 28));
-        ResizeMode = ResizeMode.NoResize;
-        ShowInTaskbar = false;
-        Topmost = false;
-
-        _virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
-        _virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
-        Left = SystemParameters.VirtualScreenLeft;
-        Top = SystemParameters.VirtualScreenTop;
-        Width = SystemParameters.VirtualScreenWidth;
-        Height = SystemParameters.VirtualScreenHeight;
-
-        Content = _canvas;
+        _root.Child = _canvas;
         _addTile = BuildAddTile();
-        SourceInitialized += OnSourceInitialized;
     }
 
     /// <summary>Initial build entry (called once). Subsequent edits use the Refresh* methods below.</summary>
@@ -91,8 +90,115 @@ public sealed class FenceLayer : Window
     {
         _layout = layout;
         _items = items;
-        BuildBoxes(items);
-        base.Show();
+        CreateDesktopWindow();
+    }
+
+    /// <summary>
+    /// Create the desktop child window (hosted WPF tree) and mount it under the desktop shell.
+    /// The window is created AS a child of the desktop host — never re-parented — so DWM composites
+    /// it. Falls back gracefully if no host can be found (a plain top-level window still works).
+    /// </summary>
+    private void CreateDesktopWindow()
+    {
+        // Re-entrancy guard: the desktop child window is created exactly once. The startup
+        // retry path (EnableFences/ApplyFencesWithRetryIfEnabled) and a manual toggle race can
+        // otherwise both reach here within a few seconds; without this, the second HwndSource
+        // overwrites _source and the first HWND is leaked (never Disposed).
+        if (_source != null) return;
+
+        try
+        {
+            IntPtr host = ResolveDesktopHost();
+
+            // Size to the host's client rect (physical px). The host is the full-screen desktop
+            // container, so (0,0)+this size places the window exactly on the desktop.
+            int w, h;
+            if (host != IntPtr.Zero &&
+                NativeMethods.GetClientRect(host, out var hcr) && hcr.Width > 0 && hcr.Height > 0)
+            {
+                w = hcr.Width;
+                h = hcr.Height;
+            }
+            else
+            {
+                w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+                h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+            }
+            if (w <= 0) w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+            if (h <= 0) h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+
+            var ps = new HwndSourceParameters
+            {
+                // Non-layered child window; click-through is done with SetWindowRgn (see ApplyRegion).
+                WindowStyle = unchecked((int)(NativeMethods.WS_CHILD | NativeMethods.WS_VISIBLE |
+                                              NativeMethods.WS_CLIPSIBLINGS | NativeMethods.WS_CLIPCHILDREN)),
+                ExtendedWindowStyle = unchecked((int)(NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_NOACTIVATE)),
+                ParentWindow = host,
+                UsesPerPixelOpacity = false,
+            };
+            ps.SetPosition(0, 0);
+            ps.SetSize(w, h);
+
+            _source = new HwndSource(ps);
+            _source.RootVisual = _root;
+            _hwnd = _source.Handle;
+
+            // Belt-and-suspenders: guarantee a non-layered, tool, non-activating child.
+            try
+            {
+                int ex = (int)FenceNative.GetWindowLongPtrW(_hwnd, FenceNative.GWL_EXSTYLE).ToInt64();
+                ex |= (int)(FenceNative.WS_EX_TOOLWINDOW | FenceNative.WS_EX_NOACTIVATE);
+                ex &= ~(int)NativeMethods.WS_EX_LAYERED;
+                FenceNative.SetWindowLongPtrW(_hwnd, FenceNative.GWL_EXSTYLE, new IntPtr(ex));
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("FenceLayer：设置扩展样式失败", ex);
+            }
+
+            // Read DPI + virtual origin now that we have a real HWND.
+            if (_source.CompositionTarget != null)
+            {
+                _dpiX = _source.CompositionTarget.TransformToDevice.M11;
+                _dpiY = _source.CompositionTarget.TransformToDevice.M22;
+            }
+            _virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
+            _virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
+
+            // Hook display / DPI changes so boxes stay aligned and click-through stays correct.
+            _source.AddHook(WndProcLayer);
+
+            // Build once DPI/origin are known, then clip + show.
+            BuildBoxes(_items);
+            ApplyRegion();
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("FenceLayer.CreateDesktopWindow 失败", ex);
+        }
+    }
+
+    /// <summary>Locate the desktop host window. GetParent(SHELLDLL_DefView) is correct in both shell
+    /// shapes (the icon WorkerW in shape A, Progman in shape B — both sit above the wallpaper
+    /// WorkerW). Progman is the final fallback. Returns Zero only if the shell is unavailable.</summary>
+    private static IntPtr ResolveDesktopHost()
+    {
+        try
+        {
+            IntPtr defView = DesktopShell.FindDefView();
+            if (defView != IntPtr.Zero)
+            {
+                IntPtr p = FenceNative.GetParent(defView);
+                if (p != IntPtr.Zero) return p;
+            }
+            IntPtr progman = NativeMethods.FindWindow("Progman", null);
+            if (progman != IntPtr.Zero) return progman;
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("FenceLayer.ResolveDesktopHost 失败", ex);
+        }
+        return IntPtr.Zero;
     }
 
     private Border BuildAddTile()
@@ -162,55 +268,24 @@ public sealed class FenceLayer : Window
     private double LogicalToVirtualX(double lx) => lx * _dpiX + _virtualLeft;
     private double LogicalToVirtualY(double ly) => ly * _dpiY + _virtualTop;
 
-    private void OnSourceInitialized(object? sender, EventArgs e)
-    {
-        try
-        {
-            var source = PresentationSource.FromVisual(this) as HwndSource;
-            if (source?.CompositionTarget != null)
-            {
-                _dpiX = source.CompositionTarget.TransformToDevice.M11;
-                _dpiY = source.CompositionTarget.TransformToDevice.M22;
-            }
-            // Install a hook for display / DPI changes so boxes stay aligned and click-through stays
-            // correct when the virtual screen or scaling changes. Removed in OnClosed.
-            _hwndSourceLayer = source;
-            _hwndSourceLayer?.AddHook(WndProcLayer);
-        }
-        catch
-        {
-            _dpiX = _dpiY = 1.0;
-        }
-
-        // Rebuild once we know the DPI so box offsets are correct.
-        if (_layout != null)
-            BuildBoxes(_items);
-
-        MountToDesktop();
-        ApplyRegion();
-    }
-
-    /// <summary>React to display / DPI changes: re-read scaling, resize to the (possibly new) virtual
-    /// screen, and rebuild box positions + click region so nothing drifts out of alignment.</summary>
     private IntPtr WndProcLayer(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == (int)WM_DISPLAYCHANGE || msg == (int)WM_DPICHANGED)
         {
             try
             {
-                if (_hwndSourceLayer?.CompositionTarget != null)
+                if (_source?.CompositionTarget != null)
                 {
-                    _dpiX = _hwndSourceLayer.CompositionTarget.TransformToDevice.M11;
-                    _dpiY = _hwndSourceLayer.CompositionTarget.TransformToDevice.M22;
+                    _dpiX = _source.CompositionTarget.TransformToDevice.M11;
+                    _dpiY = _source.CompositionTarget.TransformToDevice.M22;
                 }
                 // Re-cover the (possibly changed) virtual screen, both DPI-correct placement and the
                 // physical origin used by the click region.
                 _virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
                 _virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
-                Left = SystemParameters.VirtualScreenLeft;
-                Top = SystemParameters.VirtualScreenTop;
-                Width = SystemParameters.VirtualScreenWidth;
-                Height = SystemParameters.VirtualScreenHeight;
+
+                // Resize the desktop child window to the new host client rect.
+                ResizeToHost();
 
                 if (_layout != null)
                     BuildBoxes(_items);
@@ -225,68 +300,66 @@ public sealed class FenceLayer : Window
         return IntPtr.Zero;
     }
 
-    protected override void OnClosed(EventArgs e)
+    /// <summary>Resize the desktop child window to the host's current client rect.</summary>
+    private void ResizeToHost()
     {
-        // Remove the display/DPI hook so it does not dangle on a destroyed HWND.
-        if (_hwndSourceLayer != null)
-        {
-            try { _hwndSourceLayer.RemoveHook(WndProcLayer); } catch { }
-            _hwndSourceLayer = null;
-        }
-        base.OnClosed(e);
-    }
-
-    /// <summary>Reparent under the desktop host for correct z-order; degrade silently on any failure.</summary>
-    private void MountToDesktop()
-    {
+        if (_hwnd == IntPtr.Zero) return;
         try
         {
-            IntPtr hwnd = new WindowInteropHelper(this).Handle;
-            if (hwnd == IntPtr.Zero) return;
-
-            IntPtr defView = DesktopShell.FindDefView();
-            IntPtr host = defView != IntPtr.Zero ? FenceNative.GetParent(defView) : IntPtr.Zero;
-
-            if (host != IntPtr.Zero)
+            IntPtr host = ResolveDesktopHost();
+            int w, h;
+            if (host != IntPtr.Zero &&
+                NativeMethods.GetClientRect(host, out var hcr) && hcr.Width > 0 && hcr.Height > 0)
             {
-                NativeMethods.SetParent(hwnd, host);
-                NativeMethods.SetWindowPos(hwnd, NativeMethods.HWND_TOP, 0, 0, 0, 0,
-                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE |
-                    NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+                w = hcr.Width;
+                h = hcr.Height;
             }
             else
             {
-                HostLog.Write("FenceLayer.MountToDesktop：未找到桌面宿主窗口，降级为顶层透明窗口。");
+                w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
+                h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
             }
+            NativeMethods.SetWindowPos(_hwnd, NativeMethods.HWND_TOP, 0, 0, w, h,
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+            NativeMethods.InvalidateRect(_hwnd, IntPtr.Zero, true);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("FenceLayer.ResizeToHost 失败", ex);
+        }
+    }
 
-            // Tool window (no taskbar/alt-tab) + non-activating — applied UNCONDITIONALLY so even the
-            // fallback top-level window can never steal focus. Keep the graceful degrade logging above.
-            try
+    /// <summary>Destroy the desktop child window. Safe to call multiple times.</summary>
+    public void Close()
+    {
+        try
+        {
+            if (_source != null)
             {
-                int ex = (int)FenceNative.GetWindowLongPtrW(hwnd, FenceNative.GWL_EXSTYLE).ToInt64();
-                ex |= (int)(FenceNative.WS_EX_TOOLWINDOW | FenceNative.WS_EX_NOACTIVATE);
-                FenceNative.SetWindowLongPtrW(hwnd, FenceNative.GWL_EXSTYLE, new IntPtr(ex));
-            }
-            catch (Exception ex)
-            {
-                HostLog.Write("FenceLayer.MountToDesktop 设置扩展样式失败", ex);
+                _source.RemoveHook(WndProcLayer);
+                _source.Dispose();   // destroys the underlying HWND
             }
         }
         catch (Exception ex)
         {
-            HostLog.Write("FenceLayer.MountToDesktop 失败，降级为顶层窗口", ex);
+            HostLog.Write("FenceLayer.Close 失败", ex);
+        }
+        finally
+        {
+            _source = null;
+            _hwnd = IntPtr.Zero;
         }
     }
 
     /// <summary>Union of all box rectangles (header-only when collapsed) as the hit region → click-through
-    /// everywhere else. Coordinates are physical pixels relative to the window's client origin, DPI-scaled
-    /// so they align with the rendered (DPI-scaled) boxes.</summary>
+    /// everywhere else. Coordinates are physical pixels relative to the window's client origin, using the
+    /// SAME virtual-origin basis (<see cref="_virtualLeft"/>/<see cref="_virtualTop"/>) that the WPF boxes
+    /// are rendered with, so the region always lines up with the boxes regardless of monitor layout.</summary>
     private void ApplyRegion()
     {
         try
         {
-            IntPtr hwnd = new WindowInteropHelper(this).Handle;
-            if (hwnd == IntPtr.Zero) return;
+            if (_hwnd == IntPtr.Zero) return;
 
             IntPtr? combined = null;
             foreach (var (_, cat) in _boxes)
@@ -313,7 +386,7 @@ public sealed class FenceLayer : Window
             // The tile sits outside the box union (placed at maxRight+30), so without this it was
             // clipped out by SetWindowRgn and every click on it fell through to the desktop.
             // Same physical-coordinate basis as the boxes: region coords are physical pixels relative
-            // to the virtual origin, and the tile's Canvas position is already in logical units.
+            // to the window origin, and the tile's Canvas position is already in logical units.
             double tlx = Canvas.GetLeft(_addTile);
             double tly = Canvas.GetTop(_addTile);
             if (!double.IsNaN(tlx) && !double.IsNaN(tly))
@@ -336,14 +409,14 @@ public sealed class FenceLayer : Window
 
             if (combined != null)
             {
-                FenceNative.SetWindowRgn(hwnd, combined.Value, true);
+                FenceNative.SetWindowRgn(_hwnd, combined.Value, true);
                 // SetWindowRgn takes ownership of the region; do not DeleteObject(combined).
             }
             else
             {
                 // No boxes (defensive): clear any stale region so the empty window is fully
                 // click-through instead of swallowing clicks across its whole rectangle.
-                FenceNative.SetWindowRgn(hwnd, IntPtr.Zero, true);
+                FenceNative.SetWindowRgn(_hwnd, IntPtr.Zero, true);
             }
         }
         catch (Exception ex)
