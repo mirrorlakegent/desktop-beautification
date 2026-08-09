@@ -46,6 +46,16 @@ public sealed class WorkerWHost : IDisposable
         return "workerw-will-spawn";
     }
 
+    /// <summary>Resolve the desktop background WorkerW without spawning. The Fences layer should mount
+    /// under the SAME surface the wallpaper uses, otherwise DWM does not composite a child parented
+    /// directly to Progman. Falls back to Progman when no usable WorkerW exists.</summary>
+    public static bool TryFindWallpaperSurface(out IntPtr handle)
+    {
+        IntPtr progman = NativeMethods.FindWindow("Progman", null);
+        if (progman == IntPtr.Zero) { handle = IntPtr.Zero; return false; }
+        return TryResolve(progman, out handle, out _);
+    }
+
     /// <summary>
     /// Ensure a render target exists and return its handle. Safe to call multiple times.
     /// </summary>

@@ -73,6 +73,17 @@ public sealed class FenceLayer
     private HwndSource? _source;
     private IntPtr _hwnd = IntPtr.Zero;
 
+    // Diagnostic full-window overlay (DEBUG BUILD ONLY): when true, ApplyRegion() makes the WHOLE
+    // window visible (no per-box clipping) so a real-machine run can decide the single most important
+    // open question — "did the window render but get clipped transparent by the region" (user sees a
+    // full-screen dark/black surface) vs "the window never painted at all" (still nothing visible).
+    // Window size is captured from CreateDesktopWindow and cached here as _winW/_winH so the diagnostic
+    // region matches the real window rectangle. Now that the layer is confirmed to mount AND render
+    // on the SAME WorkerW surface as the wallpaper, this is OFF so the real per-box click-through
+    // region (not the full-window diagnostic) is applied. Re-enable only for diagnostics.
+    private bool _diagFullWindow = false;
+    private int _winW, _winH;
+
     private const uint WM_DISPLAYCHANGE = 0x007E;
     private const uint WM_DPICHANGED = 0x02E0;
 
@@ -88,9 +99,11 @@ public sealed class FenceLayer
     /// <summary>Initial build entry (called once). Subsequent edits use the Refresh* methods below.</summary>
     public void Show(DesktopIconItem[] items, FenceLayout layout)
     {
+        HostLog.Write($"FenceLayer.Show：called items={items.Length} categories={layout.Categories.Count}");
         _layout = layout;
         _items = items;
         CreateDesktopWindow();
+        HostLog.Write($"FenceLayer.Show：返回 _source={( _source == null ? "null(未创建)" : $"已创建 hwnd=0x{_hwnd.ToInt64():X}") }");
     }
 
     /// <summary>
@@ -104,11 +117,17 @@ public sealed class FenceLayer
         // retry path (EnableFences/ApplyFencesWithRetryIfEnabled) and a manual toggle race can
         // otherwise both reach here within a few seconds; without this, the second HwndSource
         // overwrites _source and the first HWND is leaked (never Disposed).
-        if (_source != null) return;
+        if (_source != null)
+        {
+            HostLog.Write($"FenceLayer.CreateDesktopWindow：跳过（_source 已存在，防重入；hwnd=0x{_hwnd.ToInt64():X}）。");
+            return;
+        }
 
+        HostLog.Write("FenceLayer.CreateDesktopWindow：开始创建桌面子窗口…");
         try
         {
             IntPtr host = ResolveDesktopHost();
+            HostLog.Write($"FenceLayer.CreateDesktopWindow：ResolveDesktopHost => 0x{host.ToInt64():X}");
 
             // Size to the host's client rect (physical px). The host is the full-screen desktop
             // container, so (0,0)+this size places the window exactly on the desktop.
@@ -126,6 +145,9 @@ public sealed class FenceLayer
             }
             if (w <= 0) w = NativeMethods.GetSystemMetrics(NativeMethods.SM_CXVIRTUALSCREEN);
             if (h <= 0) h = NativeMethods.GetSystemMetrics(NativeMethods.SM_CYVIRTUALSCREEN);
+            _winW = w;
+            _winH = h;
+            HostLog.Write($"FenceLayer.CreateDesktopWindow：缓存窗口尺寸 _winW={_winW} _winH={_winH}");
 
             var ps = new HwndSourceParameters
             {
@@ -142,6 +164,7 @@ public sealed class FenceLayer
             _source = new HwndSource(ps);
             _source.RootVisual = _root;
             _hwnd = _source.Handle;
+            HostLog.Write($"FenceLayer.CreateDesktopWindow：ok host=0x{host.ToInt64():X} hwnd=0x{_hwnd.ToInt64():X} size={w}x{h}");
 
             // Belt-and-suspenders: guarantee a non-layered, tool, non-activating child.
             try
@@ -194,19 +217,19 @@ public sealed class FenceLayer
         }
     }
 
-    /// <summary>Locate the desktop host window. GetParent(SHELLDLL_DefView) is correct in both shell
-    /// shapes (the icon WorkerW in shape A, Progman in shape B — both sit above the wallpaper
-    /// WorkerW). Progman is the final fallback. Returns Zero only if the shell is unavailable.</summary>
+    /// <summary>Locate the desktop host window. Mount under the SAME desktop surface WorkerW the
+    /// wallpaper uses — in the WorkerW shell shape a window parented directly to Progman is NOT
+    /// composited by DWM (only DefView and the wallpaper WorkerW render), so parenting to the
+    /// wallpaper WorkerW is what makes the FenceLayer actually show. Progman is the fallback.</summary>
     private static IntPtr ResolveDesktopHost()
     {
         try
         {
-            IntPtr defView = DesktopShell.FindDefView();
-            if (defView != IntPtr.Zero)
-            {
-                IntPtr p = FenceNative.GetParent(defView);
-                if (p != IntPtr.Zero) return p;
-            }
+            // Mount under the SAME desktop surface WorkerW the wallpaper uses. In the WorkerW shell
+            // shape a window parented directly to Progman is NOT composited by DWM (only DefView and
+            // the wallpaper WorkerW render); parenting to the wallpaper WorkerW makes it show.
+            if (WorkerWHost.TryFindWallpaperSurface(out IntPtr workerW) && workerW != IntPtr.Zero)
+                return workerW;
             IntPtr progman = NativeMethods.FindWindow("Progman", null);
             if (progman != IntPtr.Zero) return progman;
         }
@@ -375,6 +398,25 @@ public sealed class FenceLayer
     {
         try
         {
+            // ---- DIAGNOSTIC OVERLAY (DEBUG BUILD ONLY) ----
+            // When on, skip per-box clipping entirely and expose the WHOLE window so a real-machine
+            // run can tell "rendered but region-clipped" (full-screen dark surface) from "never
+            // painted" (still nothing). Normal click-through region logic runs only when off.
+            if (_diagFullWindow)
+            {
+                if (_hwnd != IntPtr.Zero && _winW > 0 && _winH > 0)
+                {
+                    IntPtr rgn = FenceNative.CreateRectRgn(0, 0, _winW, _winH);
+                    if (rgn != IntPtr.Zero)
+                    {
+                        FenceNative.SetWindowRgn(_hwnd, rgn, true);
+                        HostLog.Write("FenceLayer.ApplyRegion DIAG: full-window visible region set");
+                        return;
+                    }
+                }
+                HostLog.Write($"FenceLayer.ApplyRegion DIAG: 跳过（_hwnd=0x{_hwnd.ToInt64():X} _winW={_winW} _winH={_winH}），回落到正常 region。");
+            }
+
             if (_hwnd == IntPtr.Zero) return;
 
             IntPtr? combined = null;
@@ -430,9 +472,11 @@ public sealed class FenceLayer
             }
             else
             {
-                // No boxes (defensive): clear any stale region so the empty window is fully
-                // click-through instead of swallowing clicks across its whole rectangle.
-                FenceNative.SetWindowRgn(_hwnd, IntPtr.Zero, true);
+                // No boxes: keep the window visible (full-screen dark) instead of fully transparent,
+                // so a missing region never hides the whole layer.
+                IntPtr full = FenceNative.CreateRectRgn(0, 0, _winW, _winH);
+                if (full != IntPtr.Zero) FenceNative.SetWindowRgn(_hwnd, full, true);
+                HostLog.Write("FenceLayer.ApplyRegion：无命中区，回退全屏可见");
             }
         }
         catch (Exception ex)
