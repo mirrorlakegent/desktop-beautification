@@ -1639,19 +1639,37 @@ public sealed class FenceLayer
         if (_iconCache.TryGetValue(fullPath, out var cached)) return cached;
         try
         {
-            // Try SHGetStockIconInfo first for known system icons (::CLSID paths)
-            int siid = 0;
+            // ---- System icons (::CLSID paths): ExtractIconEx from system DLLs (most reliable) ----
+            string? extractDll = null;
+            int extractIdx = -1;
             if (fullPath.Equals("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", StringComparison.OrdinalIgnoreCase))
-                siid = FenceNative.SIID_COMPUTER;      // 此电脑
+                { extractDll = Environment.SystemDirectory + "\\imageres.dll"; extractIdx = 109; }  // 此电脑
             else if (fullPath.Equals("::{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase))
-                siid = FenceNative.SIID_RECYCLEBIN;     // 回收站
+                { extractDll = Environment.SystemDirectory + "\\imageres.dll"; extractIdx = 49; }   // 回收站
             else if (fullPath.Equals("::{21EC2020-3AEA-1069-A2DD-08002B30309D}", StringComparison.OrdinalIgnoreCase))
-                siid = FenceNative.SIID_CONTROLPANEL;   // 控制面板
+                { extractDll = Environment.SystemDirectory + "\\shell32.dll"; extractIdx = 21; }    // 控制面板
 
-            if (siid != 0)
+            if (extractDll != null && File.Exists(extractDll))
             {
-                // SHGSI_ICON (0x100) is REQUIRED to retrieve the HICON; SHGSI_LARGEICON alone
-                // returns E_INVALIDARG. (SHGSI_ICONLOCATION constant in this file == 0x100 == SHGSI_ICON.)
+                IntPtr hLarge, hSmall;
+                int n = FenceNative.ExtractIconEx(extractDll, extractIdx, out hLarge, out hSmall, 1);
+                if (n > 0 && hLarge != IntPtr.Zero)
+                {
+                    var bmp = IconToBitmap(hLarge);
+                    FenceNative.DestroyIcon(hLarge);
+                    if (hSmall != IntPtr.Zero) FenceNative.DestroyIcon(hSmall);
+                    if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
+                }
+                HostLog.Write($"FenceLayer ExtractIconEx 失败: dll={extractDll} idx={extractIdx} n={n}");
+                // Fall through to SHGetStockIconInfo backup
+            }
+
+            if (extractDll != null)
+            {
+                // Fallback: try SHGetStockIconInfo (may fail in some process contexts)
+                int siid = fullPath.Contains("20D04FE0") ? FenceNative.SIID_COMPUTER :
+                           fullPath.Contains("645FF040") ? FenceNative.SIID_RECYCLEBIN :
+                           FenceNative.SIID_CONTROLPANEL;
                 var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
                 int hr = FenceNative.SHGetStockIconInfo(siid, FenceNative.SHGSI_ICON | FenceNative.SHGSI_LARGEICON, out sii);
                 if (hr == 0 && sii.hIcon != IntPtr.Zero)
@@ -1660,8 +1678,7 @@ public sealed class FenceLayer
                     FenceNative.DestroyIcon(sii.hIcon);
                     if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
                 }
-                HostLog.Write($"FenceLayer SHGetStockIconInfo 失败: siid={siid} hr=0x{hr:X8} path={fullPath}");
-                // Fall through to SHGetFileInfo as backup
+                HostLog.Write($"FenceLayer 系统图标提取全部失败: path={fullPath}");
             }
 
             // Regular file: SHGetFileInfo (works for .lnk, .exe, folders, etc.)

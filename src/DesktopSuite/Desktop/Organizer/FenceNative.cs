@@ -299,4 +299,12 @@ internal static class FenceNative
     /// HICON lifetime is irrelevant after this call.</summary>
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyIcon(IntPtr hIcon);
+
+    /// <summary>Extract icons from an executable/DLL by resource index. Returns the number of icons extracted.
+    /// phiconLarge/phiconSmall receive HICON handles — caller must DestroyIcon each non-zero handle.
+    /// This is the most reliable way to get system stock icons when SHGetStockIconInfo fails
+    /// (e.g., in layered desktop-child window contexts where shell COM may not be fully initialized).</summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int ExtractIconEx(string szFileName, int nIconIndex,
+        out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
 }
