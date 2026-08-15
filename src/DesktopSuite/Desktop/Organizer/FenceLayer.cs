@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using DesktopSuite.Wallpaper;
 
@@ -82,6 +84,36 @@ public sealed class FenceLayer
     private bool _diagFullWindow = false;
     private int _winW, _winH;
 
+    // ---- M3 interaction state ----
+    private FenceCategory? _dragCat;
+    private int _dragOffsetX, _dragOffsetY;
+    private int _dragBoxIndex = -1;       // box index of the box currently being moved (for reorder swap)
+    private double _dragOrigX, _dragOrigY; // saved cat.X/Y BEFORE drag started (for clean reorder swap)
+    private DateTime _lastDragPaint = DateTime.MinValue;
+
+    // Custom box-resize state (layered+noactivate windows can't use WS_THICKFRAME reliably).
+    // _resizeDir: 0=none, 3=box bottom-right corner drag.
+    private int _resizeDir;
+    private FenceCategory? _resizeCat;
+    private int _resizeStartX, _resizeStartY;
+    private double _resizeStartW, _resizeStartH;
+
+    // Item drag between categories (Fences-style reorganize).
+    // _pendingItem is armed on item press but NOT yet a drag (no capture) so a plain click /
+    // double-click still works. Once the pointer moves past DragThreshold it promotes to _dragItemCat.
+    private (int BoxIndex, int ItemIndex)? _pendingItem;
+    private int _pendingItemStartX, _pendingItemStartY;
+    private FenceCategory? _dragItemCat;
+    private int _dragItemIndex = -1;
+    private int _dragItemX, _dragItemY;      // cursor position during item drag (for ghost rendering)
+    private int _itemDropTarget = -1;     // box index currently highlighted as the drop target
+    private int _itemDropSlot = -1;       // grid insertion slot (0-based) inside the drop target box
+    private const int DragThreshold = 4;  // px before a press becomes a drag
+
+    /// <summary>Shell icon cache: full path → GDI+ Icon (small, 16×16 at 96 DPI). Avoids repeated
+    /// SHGetFileInfo calls per paint cycle. Cleared on DPI/layout changes.</summary>
+    private readonly System.Collections.Generic.Dictionary<string, System.Drawing.Icon> _iconCache = new();
+
     private const double HeaderHeight = 28;
     private const double AddTileWidth = 160;
     private const double AddTileHeight = 48;
@@ -99,6 +131,12 @@ public sealed class FenceLayer
         _layout = layout;
         IntPtr hwnd = CreateDesktopWindow();
         HostLog.Write($"FenceLayer.Show：返回 hwnd=0x{hwnd.ToInt64():X}");
+
+        // M3: desktop-icon → box import.
+        // Implemented via the right-click "Import desktop icons" menu (OnContextMenu) — imports both the
+        // per-user and public Desktop directories plus the 3 system virtual icons (此电脑/回收站/控制面板).
+        // An earlier full-screen TOPMOST proxy-window approach (OLE drop) was abandoned: it flashed
+        // opaque-white under the Explorer icon layer and never reliably received the drop.
     }
 
     /// <summary>
@@ -160,7 +198,8 @@ public sealed class FenceLayer
                 lpfnWndProc = _wndProc,
                 hInstance = hInstance,
                 lpszClassName = _className,
-                style = 0
+                // CS_DBLCLKS is required so WM_LBUTTONDBLCLK fires (double-click to open items).
+                style = FenceNative.CS_DBLCLKS
             };
 
             ushort atom = NativeMethods.RegisterClassEx(ref wcex);
@@ -286,28 +325,37 @@ public sealed class FenceLayer
         _addTileRect = null;
         if (_layout == null) return;
 
-        // ---- Auto-layout: always compute positions (M2 has no drag-to-position yet) ----
-        // Without this, FenceCategory X/Y/Width/Height default to 0 → ALL boxes stack at
-        // (0,0). AutoLayoutGrid writes computed coordinates back into each category.
-        // TODO: when drag-to-reposition is implemented, skip this if persisted coords exist.
-        AutoLayoutGrid();
+        // ---- Auto-layout gate (content-based, NOT an instance flag) ----
+        // Run the grid ONLY when NO category has a valid size yet (fresh layout / first run). Once
+        // positions exist — assigned by AutoLayoutGrid, loaded from fences.json, or from DefaultLayout
+        // — we never overwrite them. This keeps user-dragged coordinates across application restarts
+        // (an instance flag would reset every launch and re-run the grid, eating saved positions).
+        bool needsInitialGrid = _layout.Categories.Count > 0 &&
+            _layout.Categories.All(c => c.Width <= 0 || c.Height <= 0);
+        if (needsInitialGrid)
+        {
+            AutoLayoutGrid();
+            HostLog.Write("FenceLayer.BuildBoxes：首次自动网格布局完成（后续保留用户/持久化坐标）");
+        }
 
         double maxRight = 0;
-        foreach (var cat in _layout.Categories)
+        for (int ci = 0; ci < _layout.Categories.Count; ci++)
         {
+            var cat = _layout.Categories[ci];
             int left = (int)Math.Round(cat.X - _virtualLeft);
             int top = (int)Math.Round(cat.Y - _virtualTop);
             double hLogical = cat.Collapsed ? HeaderHeight : cat.Height;
             int right = left + (int)Math.Round(cat.Width * _dpiX);
             int bottom = top + (int)Math.Round(hLogical * _dpiY);
             var names = new List<string>();
+            var paths = new List<string>(cat.MemberPaths);
             foreach (var p in cat.MemberPaths)
             {
-                var n = Path.GetFileName(p);
+                var n = GetDisplayName(p);
                 if (!string.IsNullOrWhiteSpace(n)) names.Add(n);
             }
             _boxRects.Add(new BoxRect(left, top, right, bottom, cat.DisplayName, cat.Collapsed,
-                cat.IconRef, names));
+                cat.IconRef, names, paths, ci));
             maxRight = Math.Max(maxRight, cat.X + cat.Width);
         }
 
@@ -405,6 +453,8 @@ public sealed class FenceLayer
                 {
                     _winW = nw;
                     _winH = nh;
+                    BuildBoxes();
+                    ApplyRegion();
                     UpdateVisual();
                 }
                 return IntPtr.Zero;
@@ -416,6 +466,67 @@ public sealed class FenceLayer
             case WM_DESTROY:
                 // Teardown is driven by Close(); do not unregister the class here.
                 return IntPtr.Zero;
+            case FenceNative.WM_NCHITTEST:
+                // Layered + no-activate windows do not get reliable system resize from WS_THICKFRAME,
+                // so we route ALL hits to HTCLIENT and implement resize ourselves in OnLButtonDown /
+                // OnMouseMove. This also keeps drag-move working.
+                return FenceNative.HTCLIENT;
+
+            case FenceNative.WM_SETCURSOR:
+            {
+                // lParam low word = hit-test result from our WM_NCHITTEST (always HTCLIENT = 1).
+                int ht = (int)(lParam.ToInt64() & 0xFFFF);
+                if (ht == FenceNative.HTCLIENT)
+                {
+                    FenceNative.POINT p;
+                    if (FenceNative.GetCursorPos(out p) && FenceNative.ScreenToClient(_hwnd, ref p))
+                        FenceNative.SetCursor(ChooseCursor(p.X, p.Y));
+                    else
+                        FenceNative.SetCursor(FenceNative.LoadCursor(IntPtr.Zero, FenceNative.IDC_ARROW));
+                    return new IntPtr(1); // we set the cursor ourselves; suppress DefWindowProc
+                }
+                return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
+            }
+
+            // ---- M3 interaction ----
+            case FenceNative.WM_LBUTTONDOWN:
+                OnLButtonDown(FenceNative.GET_X_LPARAM(lParam), FenceNative.GET_Y_LPARAM(lParam));
+                return IntPtr.Zero;
+            case FenceNative.WM_MOUSEMOVE:
+                OnMouseMove(FenceNative.GET_X_LPARAM(lParam), FenceNative.GET_Y_LPARAM(lParam),
+                    (wParam.ToInt64() & FenceNative.MK_LBUTTON) != 0);
+                return IntPtr.Zero;
+            case FenceNative.WM_LBUTTONUP:
+                OnLButtonUp(FenceNative.GET_X_LPARAM(lParam), FenceNative.GET_Y_LPARAM(lParam));
+                return IntPtr.Zero;
+            case FenceNative.WM_LBUTTONDBLCLK:
+                OnLButtonDblClk(FenceNative.GET_X_LPARAM(lParam), FenceNative.GET_Y_LPARAM(lParam));
+                return IntPtr.Zero;
+            case FenceNative.WM_CAPTURECHANGED:
+                // Capture stolen (Alt-Tab etc.) — finalize any in-progress drag at its last position.
+                EndDrag();
+                return IntPtr.Zero;
+            case FenceNative.WM_CONTEXTMENU:
+            {
+                // lParam is screen coords (0x8000 if from keyboard). Convert to client for hit-test.
+                int sx = FenceNative.GET_X_LPARAM(lParam);
+                int sy = FenceNative.GET_Y_LPARAM(lParam);
+                if (sx == -1 && sy == -1)
+                {
+                    return IntPtr.Zero;
+                }
+                var pt = new FenceNative.POINT { X = sx, Y = sy };
+                FenceNative.ScreenToClient(hWnd, ref pt);
+                OnContextMenu(pt.X, pt.Y);
+                return IntPtr.Zero;
+            }
+            case FenceNative.WM_COMMAND:
+            {
+                // Context-menu command: low word of wParam is the menu item id.
+                int id = (int)(wParam.ToInt64() & 0xFFFF);
+                OnContextCommand(id);
+                return IntPtr.Zero;
+            }
             default:
                 return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
         }
@@ -428,6 +539,715 @@ public sealed class FenceLayer
     /// transparent-cleared bitmap; the click-through gaps are then delivered by the SetWindowRgn hit
     /// region (see <see cref="ApplyRegion"/>). The diagnostic mode (<see cref="_diagFullWindow"/>) fills
     /// the whole bitmap dark instead.</summary>
+    // ---- M3 interaction helpers ----
+
+    private enum HitZone { None, AddTile, CollapseBtn, Title, Item }
+
+    private struct HitResult
+    {
+        public HitZone Zone;
+        public int BoxIndex;
+        public int ItemIndex;
+    }
+
+    // Layout metrics shared by DrawBoxes and hit-testing (must stay in sync!).
+    private int CornerRadius => (int)Math.Round(10 * _dpiX);
+    private int TitlePad => (int)Math.Round(12 * _dpiX);
+    private int HeaderH(int boxH) => Math.Min((int)Math.Round(HeaderHeight * _dpiY), boxH);
+    private int ItemLineH => (int)Math.Round(20 * _dpiY);
+    private int ItemTopPad => (int)Math.Round(8 * _dpiY);
+    private int CollapseBtnW => (int)Math.Round(28 * _dpiX);
+    private int CollapseBtnInner => (int)Math.Round(8 * _dpiX);
+
+    /// <summary>Map a client-pixel point to a fence element. Client coords (from WM_* lParam) and
+    /// <see cref="_boxRects"/> are the SAME basis (window-client physical pixels), so no transform.</summary>
+    private HitResult HitTest(int x, int y)
+    {
+        // 1) Add-tile (top priority so it isn't shadowed by a box beneath it).
+        if (_addTileRect.HasValue)
+        {
+            var t = _addTileRect.Value;
+            if (x >= t.Left && x <= t.Right && y >= t.Top && y <= t.Bottom)
+                return new HitResult { Zone = HitZone.AddTile };
+        }
+        // 2) Boxes (reverse order so topmost wins on overlap).
+        for (int i = _boxRects.Count - 1; i >= 0; i--)
+        {
+            var b = _boxRects[i];
+            int boxH = b.Bottom - b.Top;
+            int hh = HeaderH(boxH);
+            if (x < b.Left || x > b.Right || y < b.Top || y > b.Bottom) continue;
+
+            // Collapse button (header right).
+            int cbLeft = b.Right - CollapseBtnW;
+            int cbRight = b.Right - CollapseBtnInner;
+            if (y >= b.Top && y <= b.Top + hh && x >= cbLeft && x <= cbRight)
+                return new HitResult { Zone = HitZone.CollapseBtn, BoxIndex = i };
+
+            // Title band (drag handle) — anywhere in header except the collapse button.
+            if (y >= b.Top && y <= b.Top + hh)
+                return new HitResult { Zone = HitZone.Title, BoxIndex = i };
+
+            // Item grid cells (only when expanded) — must match DrawBoxes grid layout exactly.
+            if (!b.Collapsed && b.Items.Count > 0)
+            {
+                int iconSz = (int)Math.Round(48 * _dpiX);
+                int labelH = (int)Math.Round(20 * _dpiY);
+                int cellPad = (int)Math.Round(4 * _dpiX);
+                int gap = (int)Math.Round(2 * _dpiY);
+                int cellW = iconSz + cellPad * 2;
+                int cellH = iconSz + gap + labelH + cellPad * 2;
+                int availW = b.Right - b.Left - TitlePad * 2;
+                int cols = Math.Max(1, availW / cellW);
+
+                float y0 = b.Top + hh + (float)(6 * _dpiY);
+                int totalCells = cols * ((int)((boxH - hh - 12 * _dpiY)) / cellH);
+                if (totalCells <= 0) totalCells = b.Items.Count;
+
+                for (int k = 0; k < b.Items.Count && k < totalCells; k++)
+                {
+                    int col = k % cols;
+                    int row = k / cols;
+                    float cxLeft = b.Left + TitlePad + col * cellW;
+                    float cyTop = y0 + row * cellH;
+                    // Hit box = entire cell area
+                    if (x >= cxLeft && x < cxLeft + cellW &&
+                        y >= cyTop && y < cyTop + cellH)
+                        return new HitResult { Zone = HitZone.Item, BoxIndex = i, ItemIndex = k };
+                }
+            }
+        }
+        return new HitResult { Zone = HitZone.None };
+    }
+
+    /// <summary>Strip common shortcut suffixes (.lnk) from display names for a cleaner look.</summary>
+    private static string StripLnkSuffix(string name)
+    {
+        if (name.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            return name[..^4];
+        return name;
+    }
+
+    /// <summary>Resolve a file path or Shell Namespace CLSID path to a user-friendly display name.
+    /// Regular files: Path.GetFileName + strip .lnk suffix.
+    /// System icons (::CLSID): return the well-known Chinese display name.</summary>
+    private static string GetDisplayName(string path)
+    {
+        // Well-known system desktop icons (Shell Namespace items, not real files)
+        if (path.Equals("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", StringComparison.OrdinalIgnoreCase))
+            return "此电脑";
+        if (path.Equals("::{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase))
+            return "回收站";
+        if (path.Equals("::{21EC2020-3AEA-1069-A2DD-08002B30309D}", StringComparison.OrdinalIgnoreCase))
+            return "控制面板";
+        // Regular filesystem path
+        return StripLnkSuffix(Path.GetFileName(path));
+    }
+
+    /// <summary>Given a client-pixel point inside box <paramref name="bi"/>, return the grid
+    /// insertion slot (0-based among ALL items) the cursor is over. Mirrors the item-grid layout
+    /// used by <see cref="DrawBoxes"/> so the computed slot matches what the user sees. The result
+    /// is clamped to [0, itemCount] so dropping past the last row appends.</summary>
+    private int ComputeInsertSlot(int bi, int x, int y)
+    {
+        if (bi < 0 || bi >= _boxRects.Count) return -1;
+        var b = _boxRects[bi];
+        int w = b.Right - b.Left;
+        int h = b.Bottom - b.Top;
+        if (w <= 0 || h <= 0) return -1;
+        int pad = (int)Math.Round(12 * _dpiX);
+        int hh = Math.Min((int)Math.Round(HeaderHeight * _dpiY), h);
+        int iconSz = (int)Math.Round(48 * _dpiX);
+        int labelH = (int)Math.Round(20 * _dpiY);
+        int cellPad = (int)Math.Round(4 * _dpiX);
+        int gap = (int)Math.Round(2 * _dpiY);
+        int cellW = iconSz + cellPad * 2;
+        int cellH = iconSz + gap + labelH + cellPad * 2;
+        int availW = w - pad * 2;
+        int cols = Math.Max(1, availW / cellW);
+        float y0 = b.Top + hh + (float)(6 * _dpiY);
+
+        int col = (int)((x - (b.Left + pad)) / cellW);
+        col = Math.Clamp(col, 0, cols - 1);
+        int row = (int)((y - y0) / cellH);
+        if (row < 0) row = 0;
+        int slot = row * cols + col;
+
+        int count = _layout != null && b.CategoryIndex >= 0 && b.CategoryIndex < _layout.Categories.Count
+            ? (_layout.Categories[b.CategoryIndex].MemberPaths?.Count ?? 0)
+            : 0;
+        if (slot > count) slot = count;
+        return slot;
+    }
+
+    /// <summary>Check if two box rectangles overlap by at least the given fraction (0-1) of the smaller box's area.</summary>
+    private static bool BoxesOverlap(BoxRect a, BoxRect b, float minOverlapFraction)
+    {
+        int ixLeft = Math.Max(a.Left, b.Left);
+        int ixRight = Math.Min(a.Right, b.Right);
+        int ixTop = Math.Max(a.Top, b.Top);
+        int ixBottom = Math.Min(b.Bottom, a.Bottom);
+        if (ixRight <= ixLeft || ixBottom <= ixTop) return false; // no intersection
+        long intersectArea = (long)(ixRight - ixLeft) * (ixBottom - ixTop);
+        long areaA = (long)(a.Right - a.Left) * (a.Bottom - a.Top);
+        long areaB = (long)(b.Right - b.Left) * (b.Bottom - b.Top);
+        long minArea = Math.Min(areaA, areaB);
+        return minArea > 0 && intersectArea >= (long)(minArea * minOverlapFraction);
+    }
+
+    /// <summary>After a position swap, resolve ALL overlapping boxes using iterative
+    /// minimum-translation-vector (MTV) separation. Guarantees no two boxes overlap on exit.</summary>
+    private void SeparateOverlappingBoxes()
+    {
+        if (_layout == null || _boxRects.Count < 2) return;
+        HostLog.Write($"FenceLayer 开始分离重叠盒子：{_boxRects.Count} 个盒子");
+        int minGap = (int)Math.Round(30 * _dpiX); // generous gap between boxes (physical px)
+        int totalIters = 0;
+        // Multi-pass: each pass separates every overlapping pair. Cascading overlaps
+        // (where fixing pair A-B pushes B into C) resolve over subsequent passes.
+        for (int iter = 0; iter < 20; iter++)
+        {
+            bool anyOverlap = false;
+            for (int i = 0; i < _boxRects.Count; i++)
+            {
+                for (int j = i + 1; j < _boxRects.Count; j++)
+                {
+                    var a = _boxRects[i];
+                    var b = _boxRects[j];
+                    // Check for ANY intersection (even 1px touch)
+                    int ixL = Math.Max(a.Left, b.Left);
+                    int ixR = Math.Min(a.Right, b.Right);
+                    int ixT = Math.Max(a.Top, b.Top);
+                    int ixB = Math.Min(a.Bottom, b.Bottom);
+                    if (ixR <= ixL || ixB <= ixT) continue; // separated
+                    anyOverlap = true;
+                    int overlapX = ixR - ixL;
+                    int overlapY = ixB - ixT;
+                    var catA = _layout.Categories[a.CategoryIndex];
+                    var catB = _layout.Categories[b.CategoryIndex];
+                    // MTV: separate along axis of MINIMUM overlap (least displacement)
+                    if (overlapX > 0 && overlapY > 0)
+                    {
+                        if (overlapX <= overlapY)
+                        {
+                            // Push horizontally — full overlap + gap to guarantee separation
+                            int push = overlapX + minGap;
+                            if (a.Left < b.Left) { catA.X -= push / _dpiX; catB.X += push / _dpiX; }
+                            else { catB.X -= push / _dpiX; catA.X += push / _dpiX; }
+                        }
+                        else
+                        {
+                            // Push vertically — full overlap + gap
+                            int push = overlapY + minGap;
+                            if (a.Top < b.Top) { catA.Y -= push / _dpiY; catB.Y += push / _dpiY; }
+                            else { catB.Y -= push / _dpiY; catA.Y += push / _dpiY; }
+                        }
+                    }
+                    else if (overlapX > 0) // edge-only horizontal touch
+                    {
+                        int push = overlapX + minGap;
+                        if (a.Left < b.Left) { catA.X -= push / _dpiX; catB.X += push / _dpiX; }
+                        else { catB.X -= push / _dpiX; catA.X += push / _dpiX; }
+                    }
+                    else // edge-only vertical touch (overlapY > 0)
+                    {
+                        int push = overlapY + minGap;
+                        if (a.Top < b.Top) { catA.Y -= push / _dpiY; catB.Y += push / _dpiY; }
+                        else { catB.Y -= push / _dpiY; catA.Y += push / _dpiY; }
+                    }
+                }
+            }
+            // Rebuild rects after adjusting all pairs in this pass
+            BuildBoxes();
+            if (!anyOverlap) break; // clean exit — fully resolved
+            totalIters = iter + 1;
+        }
+        HostLog.Write($"FenceLayer 分离完成：{totalIters} 轮迭代");
+    }
+
+    /// <summary>Returns the index of the box whose bottom-right resize zone contains (x,y),
+    /// or -1. Shared by OnLButtonDown (start resize) and cursor feedback.</summary>
+    private int HitResizeZone(int x, int y)
+    {
+        const int edge = 8; // px resize-sensitive square around the bottom-right corner
+        for (int i = 0; i < _boxRects.Count; i++)
+        {
+            var b = _boxRects[i];
+            if (x >= b.Right - edge && x <= b.Right + edge &&
+                y >= b.Bottom - edge && y <= b.Bottom + edge)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Pick the mouse cursor for a client-space point: resize zone → diagonal arrow,
+    /// title → 4-way move arrow, clickable items/buttons → hand, elsewhere → default arrow.</summary>
+    private IntPtr ChooseCursor(int x, int y)
+    {
+        if (HitResizeZone(x, y) >= 0)
+            return FenceNative.LoadCursor(IntPtr.Zero, FenceNative.IDC_SIZENWSE);
+        var hit = HitTest(x, y);
+        switch (hit.Zone)
+        {
+            case HitZone.Title:
+                return FenceNative.LoadCursor(IntPtr.Zero, FenceNative.IDC_SIZEALL);
+            case HitZone.Item:
+            case HitZone.AddTile:
+            case HitZone.CollapseBtn:
+                return FenceNative.LoadCursor(IntPtr.Zero, FenceNative.IDC_HAND);
+            default:
+                return FenceNative.LoadCursor(IntPtr.Zero, FenceNative.IDC_ARROW);
+        }
+    }
+
+    private void OnLButtonDown(int x, int y)
+    {
+        // Custom box-resize: if the press is within the bottom-right resize zone of a box,
+        // start a resize of that specific box (layered+noactivate windows can't use WS_THICKFRAME).
+        int rz = HitResizeZone(x, y);
+        if (rz >= 0)
+        {
+            var b = _boxRects[rz];
+            _resizeDir = 3;
+            _resizeCat = _layout!.Categories[b.CategoryIndex];
+            _resizeStartX = x;
+            _resizeStartY = y;
+            _resizeStartW = _resizeCat.Width;
+            _resizeStartH = _resizeCat.Height;
+            FenceNative.SetCapture(_hwnd);
+            HostLog.Write($"FenceLayer 盒子缩放开始：cat={_resizeCat.DisplayName}");
+            return;
+        }
+
+        var hit = HitTest(x, y);
+        switch (hit.Zone)
+        {
+            case HitZone.AddTile:
+                NewCategory();
+                break;
+            case HitZone.CollapseBtn:
+                ToggleCollapse(hit.BoxIndex);
+                break;
+            case HitZone.Title:
+            {
+                var b = _boxRects[hit.BoxIndex];
+                _dragCat = _layout!.Categories[b.CategoryIndex];
+                _dragBoxIndex = hit.BoxIndex;
+                _dragOffsetX = x - b.Left;
+                _dragOffsetY = y - b.Top;
+                _dragOrigX = _dragCat.X;  // save original position BEFORE drag overwrites it
+                _dragOrigY = _dragCat.Y;
+                FenceNative.SetCapture(_hwnd);
+                HostLog.Write($"FenceLayer 拖拽开始：cat={_dragCat.DisplayName}");
+                break;
+            }
+            case HitZone.Item:
+                // Arm a potential item-drag. We do NOT capture yet, so a plain click or double-click
+                // (open) still works; promotion to a real drag happens in OnMouseMove past DragThreshold.
+                _pendingItem = (hit.BoxIndex, hit.ItemIndex);
+                _pendingItemStartX = x;
+                _pendingItemStartY = y;
+                break;
+            // HitZone.None / AddTile(handled above) / CollapseBtn(handled above): nothing extra.
+        }
+
+        // Fallback: if the click landed inside a box rect but HitTest didn't return Title
+        // (e.g., title bar is off-screen, or clicked on empty body area), still allow
+        // dragging the box so users can recover boxes whose title is outside the visible area.
+        if (_dragCat == null && !_pendingItem.HasValue && hit.Zone == HitZone.None)
+        {
+            for (int i = 0; i < _boxRects.Count; i++)
+            {
+                var b = _boxRects[i];
+                if (x >= b.Left && x <= b.Right && y >= b.Top && y <= b.Bottom)
+                {
+                    _dragCat = _layout!.Categories[b.CategoryIndex];
+                    _dragBoxIndex = i;
+                    _dragOffsetX = x - b.Left;
+                    _dragOffsetY = y - b.Top;
+                    _dragOrigX = _dragCat.X;
+                    _dragOrigY = _dragCat.Y;
+                    FenceNative.SetCapture(_hwnd);
+                    HostLog.Write($"FenceLayer 拖拽开始（body fallback）：cat={_dragCat.DisplayName}");
+                    break;
+                }
+            }
+        }
+    }
+
+    private void OnMouseMove(int x, int y, bool lButton)
+    {
+        // ---- Item drag between categories ----
+        // Promote a pending item press into a real drag once the pointer passes the threshold.
+        if (_pendingItem.HasValue && _dragItemCat == null)
+        {
+            if (!lButton) { _pendingItem = null; return; }
+            int ddx = x - _pendingItemStartX, ddy = y - _pendingItemStartY;
+            if (Math.Abs(ddx) > DragThreshold || Math.Abs(ddy) > DragThreshold)
+            {
+                var b = _boxRects[_pendingItem.Value.BoxIndex];
+                _dragItemCat = _layout!.Categories[b.CategoryIndex];
+                _dragItemIndex = _pendingItem.Value.ItemIndex;
+                _pendingItem = null;
+                FenceNative.SetCapture(_hwnd);
+                HostLog.Write($"FenceLayer 条目拖拽开始：cat={_dragItemCat.DisplayName} item={_dragItemIndex}");
+            }
+            else
+            {
+                return; // below threshold — stay pending, don't start box-move
+            }
+        }
+        // Active item drag: track cursor position for ghost rendering, and highlight drop-target box.
+        if (_dragItemCat != null)
+        {
+            if (!lButton) { EndDrag(); return; }
+            _dragItemX = x;
+            _dragItemY = y;
+            var h = HitTest(x, y);
+            int tgt = -1;
+            // Primary: use HitResult (works for title/item/collapse zones) — allow SAME box too
+            // (so the user can reorder items within a box, not just move across boxes).
+            if (h.Zone != HitZone.None && h.BoxIndex >= 0 && h.BoxIndex < _boxRects.Count)
+            {
+                tgt = h.BoxIndex;
+            }
+            // Fallback: direct box-rect containment (catches drops on empty areas inside a box
+            // that HitTest might classify as None due to grid cell gaps).
+            if (tgt < 0)
+            {
+                for (int bi = 0; bi < _boxRects.Count; bi++)
+                {
+                    var b = _boxRects[bi];
+                    if (x >= b.Left && x <= b.Right && y >= b.Top && y <= b.Bottom)
+                    { tgt = bi; break; }
+                }
+            }
+            int slot = tgt >= 0 ? ComputeInsertSlot(tgt, x, y) : -1;
+            if (tgt != _itemDropTarget || slot != _itemDropSlot)
+            {
+                _itemDropTarget = tgt;
+                _itemDropSlot = slot;
+            }
+            // Always redraw: ghost icon must follow cursor in real-time
+            UpdateVisual();
+            return;
+        }
+
+        // Custom box-resize: grow/shrink the targeted box from its bottom-right corner.
+        if (_resizeDir != 0 && _resizeCat != null)
+        {
+            if (!lButton) { EndDrag(); return; }
+            // Convert screen-px delta to logical px (cat.Width/Height are stored in logical units).
+            double dx = (x - _resizeStartX) / _dpiX;
+            double dy = (y - _resizeStartY) / _dpiY;
+            _resizeCat.Width = Math.Max(140, _resizeStartW + dx);
+            _resizeCat.Height = Math.Max(70, _resizeStartH + dy);
+            BuildBoxes();
+            ApplyRegion();
+            UpdateVisual();
+            return;
+        }
+
+        if (_dragCat == null) return;
+        // 左键一松开就终止拖拽。不要单纯依赖 WM_LBUTTONUP：WS_EX_NOACTIVATE 窗口的鼠标捕获是
+        // "弱"的，且拖拽期间命中区滞留在旧位置，松手点常在命中区外，WM_LBUTTONUP 经常收不到，
+        // 导致盒子黏在光标上。这里把"左键抬起(lButton==false)"作为确定性终止信号。
+        if (!lButton)
+        {
+            EndDrag();
+            return;
+        }
+
+        int boxW = (int)Math.Round(_dragCat.Width * _dpiX);
+        int boxH = (int)Math.Round((_dragCat.Collapsed ? HeaderHeight : _dragCat.Height) * _dpiY);
+        int newLeft = Math.Clamp(x - _dragOffsetX, 0, Math.Max(_winW - boxW, 0));
+        int newTop = Math.Clamp(y - _dragOffsetY, 0, Math.Max(_winH - boxH, 0));
+
+        _dragCat.X = newLeft + _virtualLeft;
+        _dragCat.Y = newTop + _virtualTop;
+
+        // Throttle redraw to ~16ms; update region too so the old box position doesn't show
+        // as an opaque-black ghost (AlphaFormat=0 makes transparent pixels render as opaque black
+        // within the stale region).
+        var now = DateTime.Now;
+        if ((now - _lastDragPaint).TotalMilliseconds >= 16)
+        {
+            _lastDragPaint = now;
+            BuildBoxes();
+            UpdateVisual();
+            ApplyRegion();
+        }
+    }
+
+    private void OnLButtonUp(int x, int y)
+    {
+        // A press that never became a drag (plain click) just clears the pending state.
+        if (_pendingItem.HasValue && _dragItemCat == null)
+        {
+            _pendingItem = null;
+            return;
+        }
+        EndDrag();
+    }
+
+    private void EndDrag()
+    {
+        // ---- Item drag (reorder within a box OR move across boxes) ----
+        if (_dragItemCat != null)
+        {
+            var src = _dragItemCat;
+            int idx = _dragItemIndex;
+            int target = _itemDropTarget;
+            int slot = _itemDropSlot;
+            _dragItemCat = null;
+            _dragItemIndex = -1;
+            _itemDropTarget = -1;
+            _itemDropSlot = -1;
+            if (FenceNative.GetCapture() == _hwnd) FenceNative.ReleaseCapture();
+
+            if (target >= 0 && target < _boxRects.Count && idx >= 0 && idx < src.MemberPaths.Count && slot >= 0)
+            {
+                var tb = _boxRects[target];
+                var tCat = _layout!.Categories[tb.CategoryIndex];
+                string path = src.MemberPaths[idx];
+
+                if (tCat != src)
+                {
+                    // Cross-category move: insert at the computed grid slot in the target box.
+                    src.MemberPaths.RemoveAt(idx);
+                    int insertAt = Math.Clamp(slot, 0, tCat.MemberPaths.Count);
+                    tCat.MemberPaths.Insert(insertAt, path);
+                    HostLog.Write($"FenceLayer 条目移动：'{System.IO.Path.GetFileName(path)}' {src.DisplayName}→{tCat.DisplayName} @ {insertAt}");
+                }
+                else
+                {
+                    // Reorder within the SAME box. The dragged item is skipped in the rendered grid,
+                    // so the visual slot must be mapped back to an insertion index in the real array:
+                    //   visual slot S  (0-based among visible items)  →  original index:
+                    //     S <= idx  →  S
+                    //     S >  idx  →  S + 1   (the gap left by the dragged item shifts later items)
+                    // After removing the dragged item (was at idx), clamp the reduced insertion index.
+                    int count = src.MemberPaths.Count;
+                    int desiredOrig = (slot <= idx) ? slot : (slot >= count ? count : slot + 1);
+                    src.MemberPaths.RemoveAt(idx);
+                    int insertAt = (desiredOrig > idx) ? desiredOrig - 1 : desiredOrig;
+                    insertAt = Math.Clamp(insertAt, 0, src.MemberPaths.Count);
+                    src.MemberPaths.Insert(insertAt, path);
+                    HostLog.Write($"FenceLayer 条目重排：'{System.IO.Path.GetFileName(path)}' {src.DisplayName} idx {idx}→{insertAt}");
+                }
+                BuildBoxes();
+                ApplyRegion();
+                UpdateVisual();
+                try { FenceStore.Current.Save(_layout!); } catch (Exception ex) { HostLog.Write("FenceLayer 条目移动落盘失败", ex); }
+                return;
+            }
+            // No valid move (dropped outside any box) — just refresh (clears highlight).
+            BuildBoxes();
+            ApplyRegion();
+            UpdateVisual();
+            return;
+        }
+
+        // ---- Resize ----
+        if (_resizeDir != 0 && _resizeCat != null)
+        {
+            _resizeDir = 0; // clear resize FIRST
+            var rCat = _resizeCat;
+            _resizeCat = null;
+            if (FenceNative.GetCapture() == _hwnd) FenceNative.ReleaseCapture();
+            BuildBoxes();
+            ApplyRegion();
+            UpdateVisual();
+            try { FenceStore.Current.Save(_layout!); } catch (Exception ex) { HostLog.Write("FenceLayer 盒子缩放落盘失败", ex); }
+            HostLog.Write($"FenceLayer 盒子缩放结束：cat={rCat.DisplayName} 已保存 (W={rCat.Width:F0} H={rCat.Height:F0})");
+            return;
+        }
+
+        // ---- Box move (+ reorder) ----
+        if (_dragCat == null) return;
+        var cat = _dragCat;
+        int movedBox = _dragBoxIndex;
+        _dragCat = null;       // null FIRST so WM_CAPTURECHANGED re-entry is a no-op
+        _dragBoxIndex = -1;
+        if (FenceNative.GetCapture() == _hwnd) FenceNative.ReleaseCapture();
+
+        // Reorder: if the CURSOR (not box center) lies inside another box, swap positions.
+        // Using cursor position means dropping anywhere on the target box (title OR body) triggers reorder.
+        // After swapping, auto-separate any overlapping boxes.
+        int dropTarget = -1;
+        if (movedBox >= 0 && movedBox < _boxRects.Count)
+        {
+            // Use the LAST known cursor position during drag to determine drop target.
+            // _boxRects reflect the final BuildBoxes() call in OnMouseMove.
+            for (int j = 0; j < _boxRects.Count; j++)
+            {
+                if (j == movedBox) continue;
+                var o = _boxRects[j];
+                // Check if the dragged box overlaps the target box significantly (>30% area overlap)
+                // OR if the last drag position was inside the target
+                if (BoxesOverlap(_boxRects[movedBox], o, 0.3f))
+                {
+                    var other = _layout!.Categories[o.CategoryIndex];
+                    if (other != cat)
+                    {
+                        dropTarget = j;
+                        // Swap positions using saved original coordinates
+                        double origX = _dragOrigX, origY = _dragOrigY;
+                        cat.X = other.X;
+                        cat.Y = other.Y;
+                        other.X = origX;
+                        other.Y = origY;
+                        HostLog.Write($"FenceLayer 分类重排：{cat.DisplayName} ↔ {other.DisplayName}");
+                    }
+                    break;
+                }
+            }
+        }
+
+        BuildBoxes();
+        // ALWAYS separate overlapping boxes — not just after swaps.
+        // A simple drag-and-drop without swap can still leave boxes overlapping.
+        SeparateOverlappingBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout!); } catch (Exception ex) { HostLog.Write("FenceLayer 拖拽落盘失败", ex); }
+        HostLog.Write($"FenceLayer 拖拽结束：cat={cat.DisplayName} 已保存");
+    }
+
+    private void OnLButtonDblClk(int x, int y)
+    {
+        // A double-click on the TITLE also fires the DOWN/DOWN that started a drag; the second
+        // WM_LBUTTONUP is replaced by WM_LBUTTONDBLCLK, so _dragCat/capture would otherwise leak and
+        // later mouse moves would keep dragging the box. Finalize any in-progress drag first.
+        _pendingItem = null; // a double-click is never a drag
+        EndDrag();
+        var hit = HitTest(x, y);
+        if (hit.Zone == HitZone.Item && hit.BoxIndex >= 0 && hit.ItemIndex >= 0)
+        {
+            var b = _boxRects[hit.BoxIndex];
+            if (hit.ItemIndex < b.Paths.Count)
+                OpenItem(b.Paths[hit.ItemIndex]);
+        }
+    }
+
+    private void OpenItem(string path)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(path) { UseShellExecute = true };
+            Process.Start(psi);
+            HostLog.Write($"FenceLayer 打开项：{path}");
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write($"FenceLayer 打开项失败 path={path}", ex);
+        }
+    }
+
+    private void ToggleCollapse(int boxIndex)
+    {
+        if (_layout == null || boxIndex < 0 || boxIndex >= _boxRects.Count) return;
+        var b = _boxRects[boxIndex];
+        var cat = _layout.Categories[b.CategoryIndex];
+        cat.Collapsed = !cat.Collapsed;
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 折叠落盘失败", ex); }
+        HostLog.Write($"FenceLayer 折叠切换：cat={cat.DisplayName} collapsed={cat.Collapsed}");
+    }
+
+    private void NewCategory()
+    {
+        if (_layout == null) return;
+        // Place the new box below all existing boxes (virtual-screen coords).
+        double maxBottom = _virtualTop;
+        foreach (var b in _boxRects) maxBottom = Math.Max(maxBottom, b.Bottom + _virtualTop);
+        double newX = _virtualLeft + 40 * _dpiX;
+        double newY = maxBottom + 20 * _dpiY;
+
+        var cat = new FenceCategory
+        {
+            Id = Guid.NewGuid().ToString(),
+            DisplayName = "新建分类",
+            IconRef = "\uD83D\uDCC1", // 📁
+            X = newX,
+            Y = newY,
+            Width = 220,
+            Height = 160,
+            Collapsed = false,
+            MemberPaths = new List<string>()
+        };
+        _layout.Categories.Add(cat);
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 新建落盘失败", ex); }
+        HostLog.Write("FenceLayer 新建分类完成");
+    }
+
+    private void OnContextMenu(int x, int y)
+    {
+        var hit = HitTest(x, y);
+        if (hit.Zone == HitZone.None || hit.BoxIndex < 0) return;
+        var b = _boxRects[hit.BoxIndex];
+        var cat = _layout!.Categories[b.CategoryIndex];
+        bool canDelete = cat.Id != FenceConstants.UncategorizedId;
+
+        IntPtr hMenu = FenceNative.CreatePopupMenu();
+        if (hMenu == IntPtr.Zero) return;
+        // Encode the category index into the menu id (1000 + index) so WM_COMMAND knows the target.
+        FenceNative.AppendMenu(hMenu, canDelete ? FenceNative.MF_STRING : FenceNative.MF_GRAYED,
+            (UIntPtr)(1000 + b.CategoryIndex),
+            canDelete ? $"删除分类「{cat.DisplayName}」" : "无法删除内置「未分类」");
+        // Import desktop icons into this box (replace fragile OLE drag-drop overlay).
+        FenceNative.AppendMenu(hMenu, FenceNative.MF_STRING, (UIntPtr)(2000 + b.CategoryIndex),
+            "导入桌面图标…");
+        FenceNative.AppendMenu(hMenu, FenceNative.MF_STRING, (UIntPtr)(3000 + b.CategoryIndex),
+            "导入桌面全部图标");
+
+        var pt = new FenceNative.POINT { X = x, Y = y };
+        FenceNative.ClientToScreen(_hwnd, ref pt);
+        FenceNative.TrackPopupMenuEx(hMenu, FenceNative.TPM_RIGHTBUTTON, pt.X, pt.Y, _hwnd, IntPtr.Zero);
+        FenceNative.DestroyMenu(hMenu);
+    }
+
+    private void OnContextCommand(int id)
+    {
+        if (_layout == null) return;
+        if (id >= 1000 && id < 2000)
+        {
+            DeleteCategory(id - 1000);
+        }
+        else if (id >= 2000 && id < 3000)
+        {
+            ImportDesktopFiles(id - 2000);
+        }
+        else if (id >= 3000)
+        {
+            ImportEntireDesktop(id - 3000);
+        }
+    }
+
+    private void DeleteCategory(int index)
+    {
+        if (_layout == null || index < 0 || index >= _layout.Categories.Count) return;
+        var cat = _layout.Categories[index];
+        if (cat.Id == FenceConstants.UncategorizedId) return; // built-in, immutable
+
+        // Re-home members into the uncategorized box so they are not lost.
+        var unc = _layout.Categories.FirstOrDefault(c => c.Id == FenceConstants.UncategorizedId);
+        if (unc != null && cat.MemberPaths != null)
+            unc.MemberPaths.AddRange(cat.MemberPaths);
+
+        _layout.Categories.RemoveAt(index);
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 删除落盘失败", ex); }
+        HostLog.Write($"FenceLayer 删除分类：{cat.DisplayName}");
+    }
+
     private void UpdateVisual()
     {
         if (_hwnd == IntPtr.Zero || _winW <= 0 || _winH <= 0) return;
@@ -481,11 +1301,9 @@ public sealed class FenceLayer
                 BlendOp = NativeMethods.AC_SRC_OVER,
                 BlendFlags = 0,
                 SourceConstantAlpha = 255,
-                // Constant-alpha (AlphaFormat = 0): the whole window is composited at full opacity, and
-                // click-through is delivered by the SetWindowRgn hit region (per-box union in ApplyRegion)
-                // which clips the window to the boxes. This avoids the GetHbitmap alpha-premultiply pitfall
-                // of per-pixel alpha, keeping Milestone 2 rendering robust.
-                AlphaFormat = 0
+                // Per-pixel alpha (AlphaFormat = 1): the bitmap's own alpha channel is respected,
+                // so semi-transparent brushes in DrawBoxes composite correctly — wallpaper shows through.
+                AlphaFormat = 1 // AC_SRC_ALPHA
             };
 
             bool ok = NativeMethods.UpdateLayeredWindow(
@@ -518,14 +1336,17 @@ public sealed class FenceLayer
         int r = (int)Math.Round(10 * _dpiX);
         int pad = (int)Math.Round(12 * _dpiX);
         int hh = (int)Math.Round(HeaderHeight * _dpiY);
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-        using var bodyBrush = new SolidBrush(Color.FromArgb(255, 20, 22, 28));
-        using var headerBrush = new SolidBrush(Color.FromArgb(255, 40, 44, 54));
-        using var borderPen = new Pen(Color.FromArgb(255, 64, 70, 86), 1);
-        using var titleBrush = new SolidBrush(Color.FromArgb(255, 255, 255, 255));
-        using var itemBrush = new SolidBrush(Color.FromArgb(235, 210, 214, 222));
+        // Semi-transparent brushes — AlphaFormat=1 (per-pixel alpha) in UpdateVisual makes these
+        // composite against the desktop wallpaper behind the fence window.
+        using var bodyBrush = new SolidBrush(Color.FromArgb(180, 20, 22, 28));   // ~70% opaque dark
+        using var headerBrush = new SolidBrush(Color.FromArgb(200, 40, 44, 54));   // ~78% opaque header
+        using var borderPen = new Pen(Color.FromArgb(160, 64, 70, 86), 1);         // ~63% opaque border
+        using var titleBrush = new SolidBrush(Color.FromArgb(255, 255, 255, 255)); // fully opaque white
+        using var itemBrush = new SolidBrush(Color.FromArgb(235, 210, 214, 222));  // mostly opaque text
         using var titleFont = new Font("Segoe UI", (float)(13 * _dpiY), FontStyle.Bold);
-        using var itemFont = new Font("Segoe UI", (float)(12 * _dpiY), FontStyle.Regular);
+        using var itemFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
         using var sf = new StringFormat(StringFormatFlags.NoWrap)
         {
             Alignment = StringAlignment.Near,
@@ -533,8 +1354,9 @@ public sealed class FenceLayer
             Trimming = StringTrimming.EllipsisCharacter
         };
 
-        foreach (var b in _boxRects)
+        for (int bi = 0; bi < _boxRects.Count; bi++)
         {
+            var b = _boxRects[bi];
             int w = b.Right - b.Left;
             int h = b.Bottom - b.Top;
             if (w <= 0 || h <= 0) continue;
@@ -544,37 +1366,129 @@ public sealed class FenceLayer
             int headerH = Math.Min(hh, h);
             FillHeaderPath(g, headerBrush, b.Left, b.Top, w, headerH, r);
 
-            // Title (with optional emoji glyph).
-            string title = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
-            if (!string.IsNullOrEmpty(b.IconRef)) title = b.IconRef + " " + title;
-            g.DrawString(title, titleFont, titleBrush,
-                new RectangleF(b.Left + pad, b.Top, w - pad * 2, headerH), sf);
-
-            // Item names (skipped when the box is collapsed).
-            if (!b.Collapsed)
+            // Title: render the optional emoji icon with the emoji font (Segoe UI Emoji), then the
+            // label with the base font. This fixes the "□□" tofu boxes from GDI+ Segoe UI.
+            string label = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
+            float titleX = b.Left + pad;
+            float titleW = w - pad * 2 - CollapseBtnW; // leave room for the collapse chevron
+            if (!string.IsNullOrEmpty(b.IconRef))
             {
-                float lineH = (float)(20 * _dpiY);
-                float y = b.Top + headerH + (float)(8 * _dpiY);
-                int maxItems = (int)((h - headerH - 16 * _dpiY) / lineH);
+                using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
+                string prefix = b.IconRef + " ";
+                var prefixSize = g.MeasureString(prefix, emojiFont, new SizeF(titleW, headerH), sf);
+                g.DrawString(prefix, emojiFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
+                titleX += prefixSize.Width;
+                titleW -= prefixSize.Width;
+            }
+            if (titleW > 0)
+                g.DrawString(label, titleFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
+
+            // Collapse/expand chevron in the header's right side (hit-tested as CollapseBtn).
+            DrawCollapseChevron(g, b, headerH);
+
+            // Items rendered as desktop-style icon grid (large icon centered, label below).
+            // Skipped when the box is collapsed.
+            if (!b.Collapsed && b.Items.Count > 0)
+            {
+                int iconSz = (int)Math.Round(48 * _dpiX);       // large icon — matches Windows desktop size
+                int labelH = (int)Math.Round(20 * _dpiY);        // single-line — room for descenders (g/p/q/y)
+                int cellPad = (int)Math.Round(4 * _dpiX);        // natural padding
+                int gap = (int)Math.Round(2 * _dpiY);            // gap between icon and label
+                int cellW = iconSz + cellPad * 2;                // cell ≈ icon width (text centered across it)
+                int cellH = iconSz + gap + labelH + cellPad * 2; // cell height
+                int availW = w - pad * 2;
+                int cols = Math.Max(1, availW / cellW);          // auto-fit columns
+
+                float y = b.Top + headerH + (float)(6 * _dpiY);
                 int shown = 0;
-                foreach (var it in b.Items)
+                int totalCells = cols * ((int)((h - headerH - 12 * _dpiY)) / cellH);
+                if (totalCells <= 0) totalCells = b.Items.Count; // fallback: show at least some
+
+                for (int ii = 0; ii < b.Items.Count && shown < totalCells; ii++)
                 {
-                    if (shown >= maxItems) break;
-                    g.DrawString(it, itemFont, itemBrush,
-                        new RectangleF(b.Left + pad, y, w - pad * 2, lineH), sf);
-                    y += lineH;
+                    // Skip the item being dragged (it's drawn as a ghost at cursor position instead)
+                    if (_dragItemCat != null && b.CategoryIndex >= 0 &&
+                        _layout!.Categories[b.CategoryIndex] == _dragItemCat && ii == _dragItemIndex)
+                    { shown++; continue; }
+
+                    int col = shown % cols;
+                    int row = shown / cols;
+                    float cx = b.Left + pad + col * cellW + cellW / 2f; // center of cell
+                    float cy = y + row * cellH;
+
+                    // Draw large icon centered in the upper portion of the cell.
+                    if (ii < b.Paths.Count)
+                    {
+                        var icon = GetFileIcon(b.Paths[ii]);
+                        if (icon != null)
+                        {
+                            g.DrawIcon(icon, (int)(cx - iconSz / 2f), (int)(cy + cellPad));
+                        }
+                    }
+
+                    // Draw label below icon, centered, single-line with ellipsis — Windows desktop style.
+                    float labelTop = cy + cellPad + iconSz + gap;
+                    using var itemSf = new StringFormat
+                    {
+                        Alignment = StringAlignment.Center,
+                        LineAlignment = StringAlignment.Near,
+                        Trimming = StringTrimming.EllipsisCharacter,
+                        FormatFlags = StringFormatFlags.NoWrap   // single line, like desktop icons
+                    };
+                    string displayName = StripLnkSuffix(b.Items[ii]);
+                    g.DrawString(displayName, itemFont, itemBrush,
+                        new RectangleF(cx - cellW / 2f, labelTop, cellW, labelH),
+                        itemSf);
+
                     shown++;
                 }
-                if (b.Items.Count > maxItems && maxItems > 0)
+                if (b.Items.Count > totalCells && totalCells > 0)
                 {
-                    g.DrawString($"… 还有 {b.Items.Count - maxItems} 项", itemFont, itemBrush,
-                        new RectangleF(b.Left + pad, y, w - pad * 2, lineH), sf);
+                    using var moreSf = new StringFormat { Alignment = StringAlignment.Center };
+                    g.DrawString($"… +{b.Items.Count - totalCells}", itemFont, itemBrush,
+                        new RectangleF(b.Left + pad, y + ((b.Items.Count - 1) / cols + 1) * cellH,
+                            w - pad * 2, labelH), moreSf);
                 }
             }
 
-            // 1px outline for definition.
+            // 1px outline for definition; highlight the box currently targeted as an item drop.
             using var borderPath = RoundedRectPath(b.Left, b.Top, w, h, r);
-            g.DrawPath(borderPen, borderPath);
+            if (bi == _itemDropTarget)
+            {
+                using var dropPen = new Pen(Color.FromArgb(255, 88, 160, 255), 2); // accent blue, 2px
+                g.DrawPath(dropPen, borderPath);
+
+                // Insertion-slot indicator: outline the grid cell where the dragged item will land.
+                if (_itemDropSlot >= 0)
+                {
+                    int padI = (int)Math.Round(12 * _dpiX);
+                    int hhI = Math.Min((int)Math.Round(HeaderHeight * _dpiY), h);
+                    int iconSzI = (int)Math.Round(48 * _dpiX);
+                    int labelHI = (int)Math.Round(20 * _dpiY);
+                    int cellPadI = (int)Math.Round(4 * _dpiX);
+                    int gapI = (int)Math.Round(2 * _dpiY);
+                    int cellWI = iconSzI + cellPadI * 2;
+                    int cellHI = iconSzI + gapI + labelHI + cellPadI * 2;
+                    int availWI = w - padI * 2;
+                    int colsI = Math.Max(1, availWI / cellWI);
+                    float y0I = b.Top + hhI + (float)(6 * _dpiY);
+                    int colI = _itemDropSlot % colsI;
+                    int rowI = _itemDropSlot / colsI;
+                    float cellLeft = b.Left + padI + colI * cellWI;
+                    float cellTop = y0I + rowI * cellHI;
+                    using var slotPen = new Pen(Color.FromArgb(220, 88, 160, 255), 2.5f);
+                    using var slotBrush = new SolidBrush(Color.FromArgb(48, 88, 160, 255)); // faint fill
+                    using var slotPath = RoundedRectPath(
+                        (int)Math.Round(cellLeft), (int)Math.Round(cellTop),
+                        cellWI, cellHI, (int)Math.Round(6 * _dpiX));
+                    g.FillPath(slotBrush, slotPath);
+                    g.DrawPath(slotPen, slotPath);
+                }
+            }
+            else
+            {
+                g.DrawPath(borderPen, borderPath);
+            }
         }
 
         // "＋ 新建分类" tile to the right of the rightmost box.
@@ -591,6 +1505,108 @@ public sealed class FenceLayer
                 new RectangleF(t.Left, t.Top, tw, th),
                 new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
         }
+
+        // ---- Ghost icon during item drag ----
+        if (_dragItemCat != null && _dragItemIndex >= 0 && _dragItemIndex < _dragItemCat.MemberPaths.Count)
+        {
+            string path = _dragItemCat.MemberPaths[_dragItemIndex];
+            string displayName = GetDisplayName(path);
+            var icon = GetFileIcon(path);
+            int ghostIconSz = (int)Math.Round(48 * _dpiX);  // slightly larger for visibility
+            int gx = _dragItemX - ghostIconSz / 2;
+            int gy = _dragItemY - ghostIconSz / 2;
+
+            // Semi-transparent overlay
+            using var ghostBg = new SolidBrush(Color.FromArgb(120, 40, 44, 52));
+            g.FillRectangle(ghostBg, gx - 4, gy - 4, ghostIconSz + 8, ghostIconSz + 36);
+
+            // Icon
+            if (icon != null)
+                g.DrawImage(icon.ToBitmap(), gx, gy, ghostIconSz, ghostIconSz);
+
+            // Label
+            using var ghostFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
+            using var ghostBrush = new SolidBrush(Color.FromArgb(220, 255, 255, 255));
+            using var ghostSf = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Near,
+                Trimming = StringTrimming.EllipsisCharacter,
+                FormatFlags = StringFormatFlags.NoWrap
+            };
+            g.DrawString(displayName, ghostFont, ghostBrush,
+                new RectangleF(gx, gy + ghostIconSz + 2, ghostIconSz, 20), ghostSf);
+        }
+    }
+
+    /// <summary>Draw the collapse/expand chevron (▾ expanded / ▸ collapsed) at the header's right,
+    /// inside the region hit-tested as <see cref="HitZone.CollapseBtn"/>.</summary>
+    private void DrawCollapseChevron(Graphics g, BoxRect b, int headerH)
+    {
+        int cx = b.Right - (CollapseBtnW + CollapseBtnInner) / 2;
+        string chevron = b.Collapsed ? "▸" : "▾";
+        using var chevFont = new Font("Segoe UI", (float)(12 * _dpiY), FontStyle.Regular);
+        using var chevBrush = new SolidBrush(Color.FromArgb(200, 180, 186, 200));
+        g.DrawString(chevron, chevFont, chevBrush,
+            new RectangleF(cx - 12, b.Top, 24, headerH),
+            new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+    }
+
+    /// <summary>Get (or retrieve from cache) the shell **large** icon for a file/directory path.
+    /// Uses SHGFI_LARGEICON so items render as desktop-style icon+label grids.
+    /// For well-known system icons (此电脑/回收站/控制面板), uses SHGetStockIconInfo which
+    /// reliably resolves them even when SHGetFileInfo fails on ::CLSID paths.
+    /// Returns null if extraction fails (caller should fall back to text-only).</summary>
+    private System.Drawing.Icon? GetFileIcon(string fullPath)
+    {
+        if (string.IsNullOrEmpty(fullPath)) return null;
+        if (_iconCache.TryGetValue(fullPath, out var cached)) return cached;
+        try
+        {
+            // Try SHGetStockIconInfo first for known system icons (::CLSID paths)
+            int siid = 0;
+            if (fullPath.Equals("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", StringComparison.OrdinalIgnoreCase))
+                siid = FenceNative.SIID_COMPUTER;      // 此电脑
+            else if (fullPath.Equals("::{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase))
+                siid = FenceNative.SIID_RECYCLEBIN;     // 回收站
+            else if (fullPath.Equals("::{21EC2020-3AEA-1069-A2DD-08002B30309D}", StringComparison.OrdinalIgnoreCase))
+                siid = FenceNative.SIID_CONTROLPANEL;   // 控制面板
+
+            if (siid != 0)
+            {
+                var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
+                int hr = FenceNative.SHGetStockIconInfo(siid, FenceNative.SHGSI_LARGEICON, out sii);
+                if (hr == 0 && sii.hIcon != IntPtr.Zero)
+                {
+                    var icon = System.Drawing.Icon.FromHandle(sii.hIcon);
+                    _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
+                    icon.Dispose();
+                    return _iconCache[fullPath];
+                }
+                // Fall through to SHGetFileInfo as backup
+            }
+
+            // Regular file: use SHGetFileInfo
+            var sfi = new FenceNative.SHFILEINFO();
+            uint flags = FenceNative.SHGFI_ICON | FenceNative.SHGFI_LARGEICON;
+            IntPtr ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
+            if (sfi.hIcon != IntPtr.Zero)
+            {
+                var icon = System.Drawing.Icon.FromHandle(sfi.hIcon);
+                _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
+                icon.Dispose();
+                return _iconCache[fullPath];
+            }
+        }
+        catch { /* degrade to no icon */ }
+        _iconCache[fullPath] = null!;
+        return null;
+    }
+
+    private void ClearIconCache()
+    {
+        foreach (var kv in _iconCache) kv.Value?.Dispose();
+        _iconCache.Clear();
     }
 
     /// <summary>Rounded-rect <see cref="GraphicsPath"/> (all four corners).</summary>
@@ -632,6 +1648,13 @@ public sealed class FenceLayer
     {
         try
         {
+            // Cancel any in-progress drag before re-layout (DPI/monitor change invalidates offsets).
+            if (_dragCat != null)
+            {
+                _dragCat = null;
+                if (FenceNative.GetCapture() == _hwnd) FenceNative.ReleaseCapture();
+            }
+
             IntPtr host = ResolveDesktopHost();
             int w, h;
             if (host != IntPtr.Zero &&
@@ -655,6 +1678,7 @@ public sealed class FenceLayer
             _virtualLeft = NativeMethods.GetSystemMetrics(NativeMethods.SM_XVIRTUALSCREEN);
             _virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
 
+            ClearIconCache(); // DPI changed → cached icon sizes are stale
             BuildBoxes();
             ApplyRegion();
             UpdateVisual();
@@ -809,7 +1833,113 @@ public sealed class FenceLayer
 
     /// <summary>Physical-pixel box rectangle (client coords) used for both the click region and
     /// (Milestone 2) the layered-bitmap rendering via <see cref="UpdateVisual"/>.</summary>
-    private readonly struct BoxRect
+    // ------------------------------------------------------------------
+    // M3 desktop-icon → box import support (called by the right-click "Import desktop icons" menu)
+    // ------------------------------------------------------------------
+
+    /// <summary>Box rectangles in FENCE-CLIENT coordinates (screen minus virtual origin). The drop proxy
+    /// is positioned at the virtual origin, so its client coords match these exactly — no conversion
+    /// needed when painting drop highlights.</summary>
+    internal List<BoxRect> GetDropBoxRects() => _boxRects;
+
+    /// <summary>Resolve a SCREEN-space point to the category index of the box under it, or -1.</summary>
+    public int HitTestScreen(int screenX, int screenY)
+    {
+        int cx = screenX - (int)Math.Round(_virtualLeft);
+        int cy = screenY - (int)Math.Round(_virtualTop);
+        for (int i = _boxRects.Count - 1; i >= 0; i--)
+        {
+            var b = _boxRects[i];
+            if (cx >= b.Left && cx <= b.Right && cy >= b.Top && cy <= b.Bottom)
+                return b.CategoryIndex;
+        }
+        return -1;
+    }
+
+    /// <summary>Add dropped desktop file paths to a category's member list (dedup), refresh + persist.</summary>
+    public void AddPathsToBox(int catIndex, IList<string> paths)
+    {
+        if (_layout == null || catIndex < 0 || catIndex >= _layout.Categories.Count) return;
+        var cat = _layout.Categories[catIndex];
+        int added = 0;
+        foreach (var p in paths)
+        {
+            if (string.IsNullOrWhiteSpace(p)) continue;
+            if (!cat.MemberPaths.Contains(p)) { cat.MemberPaths.Add(p); added++; }
+        }
+        if (added == 0) return;
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 桌面图标拖入落盘失败", ex); }
+        HostLog.Write($"FenceLayer 从桌面拖入 {added} 个图标 → {cat.DisplayName}");
+    }
+
+    /// <summary>Collect all file paths from BOTH the per-user and public Desktop directories,
+    /// plus the 3 well-known SYSTEM virtual icons (此电脑/回收站/控制面板) that live in the
+    /// Shell Namespace (registry HKLM\...\Desktop\NameSpace) rather than any filesystem folder.
+    /// Skips hidden/system files like desktop.ini.</summary>
+    private static string[] GetAllDesktopFilePaths()
+    {
+        var result = new List<string>();
+        foreach (var folder in new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
+        })
+        {
+            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                foreach (var f in Directory.GetFiles(folder))
+                {
+                    // Skip hidden/system files (desktop.ini, thumbs.db, etc.) — they are not user icons.
+                    var attr = File.GetAttributes(f);
+                    if ((attr & FileAttributes.Hidden) != 0 || (attr & FileAttributes.System) != 0)
+                        continue;
+                    result.Add(f);
+                }
+        }
+        // System desktop icons — NOT files on disk; they are Shell Namespace items rendered by Explorer.
+        // Use ::{CLSID} syntax which Windows resolves via Process.Start(UseShellExecute=true).
+        result.Add("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"); // 此电脑 (This PC)
+        result.Add("::{645FF040-5081-101B-9F08-00AA002F954E}");   // 回收站 (Recycle Bin)
+        result.Add("::{21EC2020-3AEA-1069-A2DD-08002B30309D}");   // 控制面板 (Control Panel)
+        return result.ToArray();
+    }
+
+    /// <summary>Import the ENTIRE Desktop (both per-user AND public) into a category in one tap.</summary>
+    private void ImportEntireDesktop(int catIndex)
+    {
+        if (_layout == null || catIndex < 0 || catIndex >= _layout.Categories.Count) return;
+        var paths = GetAllDesktopFilePaths();
+        HostLog.Write($"FenceLayer 导入桌面全部图标：扫描到 {paths.Length} 个文件（含公共桌面）");
+        AddPathsToBox(catIndex, paths);
+    }
+
+    /// <summary>Open a multi-select file dialog (seeded at the Desktop) and import the chosen files.</summary>
+    private void ImportDesktopFiles(int catIndex)
+    {
+        if (_layout == null || catIndex < 0 || catIndex >= _layout.Categories.Count) return;
+        string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择要加入围栏的桌面图标",
+            InitialDirectory = desk,
+            Multiselect = true,
+            CheckFileExists = true
+        };
+        try
+        {
+            // No owner window: OpenFileDialog uses the desktop as owner and runs its own modal loop.
+            if (dlg.ShowDialog() == true)
+                AddPathsToBox(catIndex, dlg.FileNames);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("FenceLayer.ImportDesktopFiles 失败", ex);
+        }
+    }
+
+    internal readonly struct BoxRect
     {
         public int Left { get; }
         public int Top { get; }
@@ -818,10 +1948,12 @@ public sealed class FenceLayer
         public string Name { get; }
         public bool Collapsed { get; }
         public string? IconRef { get; }
-        public List<string> Items { get; }
+        public List<string> Items { get; }   // basenames, for display
+        public List<string> Paths { get; }   // full paths, for opening on double-click
+        public int CategoryIndex { get; }    // index into _layout.Categories
 
         public BoxRect(int left, int top, int right, int bottom, string name, bool collapsed,
-            string? iconRef, List<string> items)
+            string? iconRef, List<string> items, List<string> paths, int categoryIndex)
         {
             Left = left;
             Top = top;
@@ -831,6 +1963,8 @@ public sealed class FenceLayer
             Collapsed = collapsed;
             IconRef = iconRef;
             Items = items;
+            Paths = paths;
+            CategoryIndex = categoryIndex;
         }
     }
 }

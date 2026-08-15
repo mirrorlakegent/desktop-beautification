@@ -89,12 +89,18 @@ public sealed class FenceStore
         var layout = new FenceLayout { SchemaVersion = 1, FencesEnabled = false };
 
         // Primary monitor work area (excludes the taskbar). NativeMethods gives us the RECT directly.
+        // NOTE: wa.Left / wa.Top are physical (screen) pixels — the SAME basis BuildBoxes uses for
+        // X/Y. The spacing steps (24/260/300/600) are LOGICAL px and are scaled by the DPI factor `s`
+        // so the grid pitch grows with DPI in lock-step with the box SIZE (logical Width/Height ×
+        // _dpiX/Y). Without this, box size scales but spacing stays fixed → boxes overlap at >100% DPI
+        // on a fresh (no fences.json) layout. (See M3 design doc §0.1 — position physical, size logical.)
         var wa = PrimaryWorkArea();
-        double col0 = wa.Left + 24;
-        double col1 = wa.Left + 24 + 260;
-        double row0 = wa.Top + 24;
-        double row1 = wa.Top + 24 + 300;
-        double row2 = wa.Top + 24 + 600;
+        double s = DpiScale();
+        double col0 = wa.Left + 24 * s;
+        double col1 = col0 + 260 * s;
+        double row0 = wa.Top + 24 * s;
+        double row1 = row0 + 300 * s;
+        double row2 = row0 + 600 * s;
         const double boxW = 240;
         const double boxH = 280;
 
@@ -177,6 +183,20 @@ public sealed class FenceStore
         X = 0, Y = 0, Width = 240, Height = 280,
         AutoClassify = false
     };
+
+    /// <summary>System DPI scale (96 DPI = 1.0). Used to place the default layout's spacing on the
+    /// physical-pixel basis that <see cref="FenceLayer.BuildBoxes"/> reads for X/Y. Falls back to 1.0
+    /// on pre-Win10 where <see cref="FenceNative.GetDpiForSystem"/> returns 0.</summary>
+    private static double DpiScale()
+    {
+        try
+        {
+            uint dpi = FenceNative.GetDpiForSystem();
+            if (dpi >= 1) return dpi / 96.0;
+        }
+        catch { /* best-effort */ }
+        return 1.0;
+    }
 
     /// <summary>Primary monitor work area via MONITORINFO (no WinForms dependency).</summary>
     private static NativeMethods.RECT PrimaryWorkArea()

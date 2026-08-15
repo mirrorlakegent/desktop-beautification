@@ -31,10 +31,11 @@ public sealed class FenceCategory
     /// <summary>Virtual-screen Y (top) in physical pixels.</summary>
     public double Y { get; set; }
 
-    /// <summary>Box width in physical pixels.</summary>
+    /// <summary>Box width in LOGICAL pixels (96-DPI basis). <c>FenceLayer.BuildBoxes</c> multiplies
+    /// this by the DPI scale to get physical pixels, so boxes grow with DPI (DPI-aware).</summary>
     public double Width { get; set; }
 
-    /// <summary>Box height in physical pixels.</summary>
+    /// <summary>Box height in LOGICAL pixels (96-DPI basis). Same DPI treatment as <see cref="Width"/>.</summary>
     public double Height { get; set; }
 
     /// <summary>When true the box body is collapsed (only the header shows).</summary>
