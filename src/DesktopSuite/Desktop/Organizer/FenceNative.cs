@@ -274,6 +274,7 @@ internal static class FenceNative
     public const int SIID_RECYCLEBIN = 48;      // 回收站 (Recycle Bin)
     public const int SIID_CONTROLPANEL = 23;     // 控制面板 (Control Panel)
 
+    public const uint SHGSI_ICON         = 0x00000100;  // retrieve the HICON (REQUIRED to get hIcon)
     public const uint SHGSI_ICONLOCATION = 0x00000100; // fill szPath / iSysImageIndex
     public const uint SHGSI_LARGEICON     = 0x00000000;  // large (48px at 96 DPI)
     public const uint SHGSI_SMALLICON     = 0x00000001;  // small (16px)
@@ -292,4 +293,10 @@ internal static class FenceNative
 
     [DllImport("shell32.dll", SetLastError = true)]
     public static extern int SHGetStockIconInfo(int siid, uint uFlags, out SHSTOCKICONINFO psii);
+
+    /// <summary>Destroy an icon handle returned by SHGetFileInfo / SHGetStockIconInfo. The caller
+    /// owns these handles and must release them; we copy the pixels to a managed Bitmap first so the
+    /// HICON lifetime is irrelevant after this call.</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
 }

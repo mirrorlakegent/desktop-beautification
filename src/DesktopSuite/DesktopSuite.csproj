@@ -10,6 +10,7 @@
     <RootNamespace>DesktopSuite</RootNamespace>
     <AssemblyName>DesktopSuite</AssemblyName>
     <Platforms>x64</Platforms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <!--

@@ -113,7 +113,7 @@ public sealed class FenceLayer
 
     /// <summary>Shell icon cache: full path → GDI+ Icon (small, 16×16 at 96 DPI). Avoids repeated
     /// SHGetFileInfo calls per paint cycle. Cleared on DPI/layout changes.</summary>
-    private readonly System.Collections.Generic.Dictionary<string, System.Drawing.Icon> _iconCache = new();
+    private readonly System.Collections.Generic.Dictionary<string, System.Drawing.Bitmap> _iconCache = new();
 
     private const double HeaderHeight = 28;
     private const double AddTileWidth = 160;
@@ -1287,6 +1287,12 @@ public sealed class FenceLayer
             hdcMem = NativeMethods.CreateCompatibleDC(hdcScreen);
             if (hdcMem == IntPtr.Zero) return;
 
+            // UpdateLayeredWindow with AC_SRC_ALPHA expects the source bitmap in PREMULTIPLIED
+            // alpha (PARGB). GDI+ stores straight alpha in Format32bppArgb, so we premultiply the
+            // pixel bytes before handing the bitmap to GetHbitmap — otherwise DWM double-premultiplies
+            // and icon edges (fine alpha) render dark/invisible against the box background.
+            PremultiplyAlpha(bmp);
+
             hBmp = bmp.GetHbitmap();
             if (hBmp == IntPtr.Zero) return;
             hBmpOld = NativeMethods.SelectObject(hdcMem, hBmp);
@@ -1423,7 +1429,7 @@ public sealed class FenceLayer
                         var icon = GetFileIcon(b.Paths[ii]);
                         if (icon != null)
                         {
-                            g.DrawIcon(icon, (int)(cx - iconSz / 2f), (int)(cy + cellPad));
+                            g.DrawImage(icon, (int)(cx - iconSz / 2f), (int)(cy + cellPad), iconSz, iconSz);
                         }
                     }
 
@@ -1523,7 +1529,7 @@ public sealed class FenceLayer
 
             // Icon
             if (icon != null)
-                g.DrawImage(icon.ToBitmap(), gx, gy, ghostIconSz, ghostIconSz);
+                g.DrawImage(icon, gx, gy, ghostIconSz, ghostIconSz);
 
             // Label
             using var ghostFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
@@ -1621,14 +1627,13 @@ public sealed class FenceLayer
         catch { return null; }
     }
 
-    /// <summary>Get (or retrieve from cache) the shell **large** icon for a file/directory path.
-    /// Uses SHGFI_LARGEICON so items render as desktop-style icon+label grids.
-    /// For well-known system icons (此电脑/回收站/控制面板), uses SHGetStockIconInfo which
-    /// reliably resolves them even when SHGetFileInfo fails on ::CLSID paths.
-    /// Returns null if extraction fails (caller should fall back to text-only).
-    /// NOTE: null results are NOT cached — failures are retried on each paint until success,
-    /// so transient shell issues (AV scanning, shell ext loading) don't permanently blank icons.</summary>
-    private System.Drawing.Icon? GetFileIcon(string fullPath)
+    /// <summary>Get (or retrieve from cache) the shell **large** icon for a file/directory path,
+    /// returned as a managed <see cref="Bitmap"/> (deep pixel copy) so there is no HICON lifetime
+    /// hazard. Uses SHGFI_LARGEICON so items render as desktop-style icon+label grids.
+    /// For well-known system icons (此电脑/回收站/控制面板), uses SHGetStockIconInfo (with the
+    /// SHGSI_ICON flag) which reliably resolves them even when SHGetFileInfo fails on ::CLSID paths.
+    /// Returns null if extraction fails (caller should fall back to text-only).</summary>
+    private System.Drawing.Bitmap? GetFileIcon(string fullPath)
     {
         if (string.IsNullOrEmpty(fullPath)) return null;
         if (_iconCache.TryGetValue(fullPath, out var cached)) return cached;
@@ -1645,33 +1650,31 @@ public sealed class FenceLayer
 
             if (siid != 0)
             {
+                // SHGSI_ICON (0x100) is REQUIRED to retrieve the HICON; SHGSI_LARGEICON alone
+                // returns E_INVALIDARG. (SHGSI_ICONLOCATION constant in this file == 0x100 == SHGSI_ICON.)
                 var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
-                int hr = FenceNative.SHGetStockIconInfo(siid, FenceNative.SHGSI_LARGEICON, out sii);
+                int hr = FenceNative.SHGetStockIconInfo(siid, FenceNative.SHGSI_ICON | FenceNative.SHGSI_LARGEICON, out sii);
                 if (hr == 0 && sii.hIcon != IntPtr.Zero)
                 {
-                    var icon = System.Drawing.Icon.FromHandle(sii.hIcon);
-                    _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
-                    icon.Dispose();
-                    return _iconCache[fullPath];
+                    var bmp = IconToBitmap(sii.hIcon);
+                    FenceNative.DestroyIcon(sii.hIcon);
+                    if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
                 }
                 HostLog.Write($"FenceLayer SHGetStockIconInfo 失败: siid={siid} hr=0x{hr:X8} path={fullPath}");
                 // Fall through to SHGetFileInfo as backup
             }
 
-            // Regular file: use SHGetFileInfo (this works for .lnk, .exe, folders, etc.)
-            // Also serves as fallback for ::CLSID paths if SHGetStockIconInfo failed.
+            // Regular file: SHGetFileInfo (works for .lnk, .exe, folders, etc.)
             var sfi = new FenceNative.SHFILEINFO();
             uint flags = FenceNative.SHGFI_ICON | FenceNative.SHGFI_LARGEICON;
             IntPtr ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
             if (sfi.hIcon != IntPtr.Zero)
             {
-                var icon = System.Drawing.Icon.FromHandle(sfi.hIcon);
-                _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
-                icon.Dispose();
-                return _iconCache[fullPath];
+                var bmp = IconToBitmap(sfi.hIcon);
+                FenceNative.DestroyIcon(sfi.hIcon);
+                if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
             }
 
-            // Log failure with useful diagnostics
             bool exists = File.Exists(fullPath) || Directory.Exists(fullPath);
             HostLog.Write($"FenceLayer GetFileIcon 无图标: path={fullPath} exists={exists} SHGFI_ret=0x{ret.ToInt64():X8}");
         }
@@ -1679,14 +1682,57 @@ public sealed class FenceLayer
         {
             HostLog.Write($"FenceLayer GetFileIcon 异常: path={fullPath}", ex);
         }
-        // DO NOT cache null — allow retry on next paint cycle
         return null;
+    }
+
+    /// <summary>Convert a shell HICON to a managed Bitmap (deep copy of pixels) so the shell's
+    /// HICON can be safely DestroyIcon'd immediately and the bitmap has no handle lifetime hazards.
+    /// This is the Fences-style robust pattern — caching the raw Icon/Clone shares the HICON and
+    /// breaks once the original is disposed.</summary>
+    private static System.Drawing.Bitmap? IconToBitmap(IntPtr hIcon)
+    {
+        try
+        {
+            using var icon = System.Drawing.Icon.FromHandle(hIcon);
+            return icon.ToBitmap();
+        }
+        catch { return null; }
     }
 
     private void ClearIconCache()
     {
         foreach (var kv in _iconCache) kv.Value?.Dispose();
         _iconCache.Clear();
+    }
+
+    /// <summary>Convert a straight-alpha ARGB bitmap to premultiplied-alpha (PARGB) in place.
+    /// Required before <see cref="Bitmap.GetHbitmap"/> + UpdateLayeredWindow(AC_SRC_ALPHA), which
+    /// expects premultiplied source pixels. Without this, DWM re-premultiplies and fine-alpha icon
+    /// edges come out dark/invisible.</summary>
+    private static void PremultiplyAlpha(Bitmap bmp)
+    {
+        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+        try
+        {
+            unsafe
+            {
+                byte* ptr = (byte*)data.Scan0;
+                int bytes = data.Stride * bmp.Height;
+                for (int i = 0; i < bytes; i += 4)
+                {
+                    byte a = ptr[i + 3];
+                    if (a == 0 || a == 255) continue; // fully transparent / opaque need no change
+                    ptr[i]     = (byte)(ptr[i]     * a / 255); // B
+                    ptr[i + 1] = (byte)(ptr[i + 1] * a / 255); // G
+                    ptr[i + 2] = (byte)(ptr[i + 2] * a / 255); // R
+                }
+            }
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+        }
     }
 
     /// <summary>Rounded-rect <see cref="GraphicsPath"/> (all four corners).</summary>
