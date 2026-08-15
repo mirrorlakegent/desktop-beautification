@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -1552,6 +1553,74 @@ public sealed class FenceLayer
             new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
     }
 
+    // ---- .lnk shortcut arrow removal -----------------------------------------------
+    // SHGetFileInfo on a .lnk always paints the little "shortcut arrow" overlay. To render a clean
+    // icon (no arrow), we resolve the shortcut to its REAL target via IShellLink and then ask the
+    // shell for the *target's* icon. CLSID_ShellLink = 00021401-0000-0000-C000-000000000046.
+
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellLinkW
+    {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cchMaxPath, IntPtr pfd, uint fFlags);
+        void GetIDList(out IntPtr ppidl);
+        void SetIDList(IntPtr pidl);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cchMaxName);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cchMaxPath);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cchMaxPath);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void GetHotkey(out short pwHotkey);
+        void SetHotkey(short wHotkey);
+        void GetShowCmd(out int piShowCmd);
+        void SetShowCmd(int iShowCmd);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+        void Resolve(IntPtr hwnd, uint fFlags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+    }
+
+    [ComImport, Guid("0000010B-0000-0000-C000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPersistFile
+    {
+        void GetClassID(out Guid pClassID);
+        [PreserveSig] int IsDirty();
+        void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+        void Save([MarshalAs(UnmanagedType.LPWStr)] string? pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
+        void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+        void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+    }
+
+    /// <summary>Resolve a .lnk shortcut to its target file path (no arrow overlay needed afterwards).
+    /// Returns null on any failure so the caller can fall back to the .lnk's own (arrowed) icon.</summary>
+    private static string? ResolveLnkTarget(string lnkPath)
+    {
+        try
+        {
+            var type = Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"));
+            if (type == null) return null;
+            var link = (IShellLinkW)Activator.CreateInstance(type)!;
+            try
+            {
+                var persist = (IPersistFile)link;
+                persist.Load(lnkPath, 0); // STGM_READ
+                link.Resolve(IntPtr.Zero, 0x1 /* SLR_NO_UI */ | 0x100 /* SLR_NOSEARCH */);
+                var sb = new StringBuilder(260);
+                link.GetPath(sb, sb.Capacity, IntPtr.Zero, 0);
+                string target = sb.ToString();
+                return string.IsNullOrWhiteSpace(target) ? null : target;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(link);
+            }
+        }
+        catch { return null; }
+    }
+
     /// <summary>Get (or retrieve from cache) the shell **large** icon for a file/directory path.
     /// Uses SHGFI_LARGEICON so items render as desktop-style icon+label grids.
     /// For well-known system icons (此电脑/回收站/控制面板), uses SHGetStockIconInfo which
@@ -1572,6 +1641,18 @@ public sealed class FenceLayer
             else if (fullPath.Equals("::{21EC2020-3AEA-1069-A2DD-08002B30309D}", StringComparison.OrdinalIgnoreCase))
                 siid = FenceNative.SIID_CONTROLPANEL;   // 控制面板
 
+            // iconPath is what we actually extract from; the cache key stays `fullPath`
+            // (the original item path) so repeated lookups hit the cache.
+            string iconPath = fullPath;
+            // Shortcut (.lnk): resolve the REAL target and use ITS icon so the little
+            // "shortcut arrow" overlay is not painted.
+            if (siid == 0 && iconPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            {
+                string? target = ResolveLnkTarget(iconPath);
+                if (!string.IsNullOrWhiteSpace(target))
+                    iconPath = target;
+            }
+
             if (siid != 0)
             {
                 var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
@@ -1586,10 +1667,10 @@ public sealed class FenceLayer
                 // Fall through to SHGetFileInfo as backup
             }
 
-            // Regular file: use SHGetFileInfo
+            // Regular file (or resolved shortcut target): use SHGetFileInfo
             var sfi = new FenceNative.SHFILEINFO();
             uint flags = FenceNative.SHGFI_ICON | FenceNative.SHGFI_LARGEICON;
-            IntPtr ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
+            IntPtr ret = FenceNative.SHGetFileInfo(iconPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
             if (sfi.hIcon != IntPtr.Zero)
             {
                 var icon = System.Drawing.Icon.FromHandle(sfi.hIcon);
