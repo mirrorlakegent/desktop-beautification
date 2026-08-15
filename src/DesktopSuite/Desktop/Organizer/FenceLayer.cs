@@ -1625,7 +1625,9 @@ public sealed class FenceLayer
     /// Uses SHGFI_LARGEICON so items render as desktop-style icon+label grids.
     /// For well-known system icons (此电脑/回收站/控制面板), uses SHGetStockIconInfo which
     /// reliably resolves them even when SHGetFileInfo fails on ::CLSID paths.
-    /// Returns null if extraction fails (caller should fall back to text-only).</summary>
+    /// Returns null if extraction fails (caller should fall back to text-only).
+    /// NOTE: null results are NOT cached — failures are retried on each paint until success,
+    /// so transient shell issues (AV scanning, shell ext loading) don't permanently blank icons.</summary>
     private System.Drawing.Icon? GetFileIcon(string fullPath)
     {
         if (string.IsNullOrEmpty(fullPath)) return null;
@@ -1652,10 +1654,12 @@ public sealed class FenceLayer
                     icon.Dispose();
                     return _iconCache[fullPath];
                 }
+                HostLog.Write($"FenceLayer SHGetStockIconInfo 失败: siid={siid} hr=0x{hr:X8} path={fullPath}");
                 // Fall through to SHGetFileInfo as backup
             }
 
-            // Regular file: use SHGetFileInfo (this works reliably for .lnk, .exe, folders, etc.)
+            // Regular file: use SHGetFileInfo (this works for .lnk, .exe, folders, etc.)
+            // Also serves as fallback for ::CLSID paths if SHGetStockIconInfo failed.
             var sfi = new FenceNative.SHFILEINFO();
             uint flags = FenceNative.SHGFI_ICON | FenceNative.SHGFI_LARGEICON;
             IntPtr ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
@@ -1666,9 +1670,16 @@ public sealed class FenceLayer
                 icon.Dispose();
                 return _iconCache[fullPath];
             }
+
+            // Log failure with useful diagnostics
+            bool exists = File.Exists(fullPath) || Directory.Exists(fullPath);
+            HostLog.Write($"FenceLayer GetFileIcon 无图标: path={fullPath} exists={exists} SHGFI_ret=0x{ret.ToInt64():X8}");
         }
-        catch { /* degrade to no icon */ }
-        _iconCache[fullPath] = null!;
+        catch (Exception ex)
+        {
+            HostLog.Write($"FenceLayer GetFileIcon 异常: path={fullPath}", ex);
+        }
+        // DO NOT cache null — allow retry on next paint cycle
         return null;
     }
 
