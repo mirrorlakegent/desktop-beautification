@@ -1641,18 +1641,6 @@ public sealed class FenceLayer
             else if (fullPath.Equals("::{21EC2020-3AEA-1069-A2DD-08002B30309D}", StringComparison.OrdinalIgnoreCase))
                 siid = FenceNative.SIID_CONTROLPANEL;   // 控制面板
 
-            // iconPath is what we actually extract from; the cache key stays `fullPath`
-            // (the original item path) so repeated lookups hit the cache.
-            string iconPath = fullPath;
-            // Shortcut (.lnk): resolve the REAL target and use ITS icon so the little
-            // "shortcut arrow" overlay is not painted.
-            if (siid == 0 && iconPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
-            {
-                string? target = ResolveLnkTarget(iconPath);
-                if (!string.IsNullOrWhiteSpace(target))
-                    iconPath = target;
-            }
-
             if (siid != 0)
             {
                 var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
@@ -1667,32 +1655,16 @@ public sealed class FenceLayer
                 // Fall through to SHGetFileInfo as backup
             }
 
-            // Regular file (or resolved shortcut target): use SHGetFileInfo.
-            // For .lnk files, iconPath may have been replaced with the real target (to avoid the
-            // shortcut-arrow overlay). If the target is missing / inaccessible, fall back to the
-            // original .lnk so at least an icon (with arrow) appears instead of blank space.
+            // Regular file: use SHGetFileInfo (this works reliably for .lnk, .exe, folders, etc.)
             var sfi = new FenceNative.SHFILEINFO();
             uint flags = FenceNative.SHGFI_ICON | FenceNative.SHGFI_LARGEICON;
-            IntPtr ret = FenceNative.SHGetFileInfo(iconPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
+            IntPtr ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
             if (sfi.hIcon != IntPtr.Zero)
             {
                 var icon = System.Drawing.Icon.FromHandle(sfi.hIcon);
                 _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
                 icon.Dispose();
                 return _iconCache[fullPath];
-            }
-            // Fallback: if we tried the resolved target and got nothing, try the original .lnk itself
-            if (iconPath != fullPath && fullPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
-            {
-                sfi = new FenceNative.SHFILEINFO();
-                ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
-                if (sfi.hIcon != IntPtr.Zero)
-                {
-                    var icon = System.Drawing.Icon.FromHandle(sfi.hIcon);
-                    _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
-                    icon.Dispose();
-                    return _iconCache[fullPath];
-                }
             }
         }
         catch { /* degrade to no icon */ }
