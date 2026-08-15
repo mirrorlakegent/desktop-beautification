@@ -1667,7 +1667,10 @@ public sealed class FenceLayer
                 // Fall through to SHGetFileInfo as backup
             }
 
-            // Regular file (or resolved shortcut target): use SHGetFileInfo
+            // Regular file (or resolved shortcut target): use SHGetFileInfo.
+            // For .lnk files, iconPath may have been replaced with the real target (to avoid the
+            // shortcut-arrow overlay). If the target is missing / inaccessible, fall back to the
+            // original .lnk so at least an icon (with arrow) appears instead of blank space.
             var sfi = new FenceNative.SHFILEINFO();
             uint flags = FenceNative.SHGFI_ICON | FenceNative.SHGFI_LARGEICON;
             IntPtr ret = FenceNative.SHGetFileInfo(iconPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
@@ -1677,6 +1680,19 @@ public sealed class FenceLayer
                 _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
                 icon.Dispose();
                 return _iconCache[fullPath];
+            }
+            // Fallback: if we tried the resolved target and got nothing, try the original .lnk itself
+            if (iconPath != fullPath && fullPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+            {
+                sfi = new FenceNative.SHFILEINFO();
+                ret = FenceNative.SHGetFileInfo(fullPath, 0, ref sfi, (uint)Marshal.SizeOf<FenceNative.SHFILEINFO>(), flags);
+                if (sfi.hIcon != IntPtr.Zero)
+                {
+                    var icon = System.Drawing.Icon.FromHandle(sfi.hIcon);
+                    _iconCache[fullPath] = (System.Drawing.Icon)icon.Clone();
+                    icon.Dispose();
+                    return _iconCache[fullPath];
+                }
             }
         }
         catch { /* degrade to no icon */ }
