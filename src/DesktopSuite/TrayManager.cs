@@ -171,21 +171,13 @@ public sealed class TrayManager : IDisposable
     /// Falls back to a simple hand-drawn icon if the file is missing.</summary>
     private static Icon LoadBrandTrayIcon()
     {
-        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tray_icon.png");
+        // Load the multi-size brand ICO (16~256px). `new Icon(path)` lets Windows pick the best
+        // size for the current DPI, so the tray glyph stays crisp on HiDPI displays (a hand-rolled
+        // 48px Bitmap would be upscaled and blurry). Falls back to a drawn icon if the file is missing.
+        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tray_icon.ico");
         if (File.Exists(path))
         {
-            try
-            {
-                using var src = new Bitmap(path);
-                // Scale to standard tray icon size (48px for HiDPI-aware apps).
-                using var bmp = new Bitmap(48, 48, PixelFormat.Format32bppArgb);
-                using (var g = Graphics.FromImage(bmp))
-                {
-                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(src, 0, 0, 48, 48);
-                }
-                return Icon.FromHandle(bmp.GetHicon());
-            }
+            try { return new Icon(path); }
             catch { /* fall through to fallback */ }
         }
 

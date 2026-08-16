@@ -14,11 +14,11 @@
     <ApplicationIcon>..\..\assets\brand\app_icon.ico</ApplicationIcon>
   </PropertyGroup>
 
-  <!-- Brand assets: tray icon PNG is copied to output so TrayManager can load it at runtime -->
+  <!-- Brand assets: tray icon ICO (multi-size) is copied to output so TrayManager loads it at runtime -->
   <ItemGroup>
-    <Content Include="..\..\assets\brand\tray_icon.png">
+    <Content Include="..\..\assets\brand\tray_icon.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>tray_icon.png</Link>
+      <Link>tray_icon.ico</Link>
     </Content>
   </ItemGroup>
 
