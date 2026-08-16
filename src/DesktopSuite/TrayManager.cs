@@ -80,7 +80,9 @@ public sealed class TrayManager : IDisposable
         menu.Items.Add(new ToolStripMenuItem("退出并停止壁纸", null, (_, _) => _owner.ExitStopWallpaper()));
 
         _notify.ContextMenuStrip = menu;
-        _notify.DoubleClick += (_, _) => _owner.ShowMainWindow();
+        // M3.30: double-click the tray icon to toggle (show/hide) the fences overlay; falls back to
+        // showing the main window when fences are not enabled.
+        _notify.DoubleClick += (_, _) => _owner.ToggleFenceOverlay();
 
         RefreshSoundLabel();
         RefreshLaunchOnBootLabel();

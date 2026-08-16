@@ -14,6 +14,7 @@ using DesktopSuite.Safety;
 using DesktopSuite.Themes;
 using DesktopSuite.Wallpaper;
 using Microsoft.Win32;
+using System.Windows.Threading;
 
 namespace DesktopSuite;
 
@@ -41,6 +42,11 @@ public partial class MainWindow : Window
     /// <summary>0/1 latch serialising the long-running desktop operations (icon apply / scene apply)
     /// that now run on the thread pool, so overlapping clicks cannot interleave two shell toggles (P1-6).</summary>
     private int _desktopBusy;
+
+    // ---- M3.30: double-click desktop to toggle fences + idle auto-hide ----
+    private DesktopDoubleClickHook? _desktopHook;
+    private DispatcherTimer? _idleTimer;
+    private const int FenceIdleHideSeconds = 30;
 
     public MainWindow()
     {
@@ -109,6 +115,21 @@ public partial class MainWindow : Window
         // closed (we minimise-to-tray, so the GUI process stays alive to own the icon).
         _tray = new TrayManager(this, _wallpaper, _settings, _iconHider, _scenes);
         _uiReady = true;
+
+        // M3.30: double-click the empty desktop to toggle the fences overlay, and auto-hide after
+        // a period of no interaction. The hook installs on this (Dispatcher) thread, which pumps
+        // messages, so its callback runs on the UI thread and is safe to touch Win32 state.
+        try
+        {
+            _desktopHook = new DesktopDoubleClickHook(OnDesktopDoubleClick);
+            _idleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _idleTimer.Tick += OnIdleTick;
+            _idleTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("M3.30 初始化失败（钩子/定时器）", ex);
+        }
 
         // V11A fix: hook WM_QUERYENDSESSION at the HWND level as a backstop beyond WPF's
         // Application.SessionEnding. In --background mode the main window's HWND exists but
@@ -196,6 +217,8 @@ public partial class MainWindow : Window
         RestoreIconsOnTeardown("窗口关闭");
         _rotator?.Dispose();
         _tray?.Dispose();
+        _desktopHook?.Dispose();
+        _idleTimer?.Stop();
         _settings.Save();
         _wallpaper.Dispose();
         base.OnClosed(e);
@@ -244,6 +267,58 @@ public partial class MainWindow : Window
     }
 
     // ---- Tray-driven actions (called by TrayManager) ----
+
+    /// <summary>M3.30: tray double-click toggles the fences overlay (hide when shown, show when
+    /// hidden). If fences were never enabled, fall back to showing the main window.</summary>
+    public void ToggleFenceOverlay()
+    {
+        if (_fenceLayer != null) { _fenceLayer.ToggleHidden(); return; }
+        ShowMainWindow();
+    }
+
+    /// <summary>Low-level hook callback: a double-click was detected somewhere on screen. Toggle the
+    /// overlay only when it landed on the bare desktop (not on a fence box, not on another window).</summary>
+    private void OnDesktopDoubleClick(int x, int y)
+    {
+        if (_fenceLayer == null) return;
+        IntPtr hw = FenceNative.WindowFromPoint(new FenceNative.POINT { X = x, Y = y });
+        if (hw == _fenceLayer.Hwnd) return;       // double-click on a fence box → let FenceLayer handle it
+        if (!IsDesktopWindow(hw)) return;          // taskbar / other app window → ignore
+        _fenceLayer.ToggleHidden();
+        HostLog.Write($"桌面双击 → 围栏 ToggleHidden（hidden={_fenceLayer.Hidden}）");
+    }
+
+    /// <summary>True if <paramref name="hwnd"/> belongs to the desktop background window tree
+    /// (Progman / WorkerW / SHELLDLL_DefView / SysListView32). When fences are active the native
+    /// desktop icons are hidden, so any hit on this tree is the empty desktop background.</summary>
+    private static bool IsDesktopWindow(IntPtr hwnd)
+    {
+        IntPtr h = hwnd;
+        for (int i = 0; i < 24 && h != IntPtr.Zero; i++)
+        {
+            var sb = new StringBuilder(64);
+            if (FenceNative.GetClassName(h, sb, sb.Capacity) > 0)
+            {
+                string cls = sb.ToString();
+                if (cls is "Progman" or "WorkerW" or "SHELLDLL_DefView" or "SysListView32")
+                    return true;
+            }
+            h = FenceNative.GetParent(h);
+        }
+        return false;
+    }
+
+    /// <summary>Idle auto-hide: if the overlay has been shown and untouched for
+    /// <see cref="FenceIdleHideSeconds"/>, collapse it away.</summary>
+    private void OnIdleTick(object? sender, EventArgs e)
+    {
+        if (_fenceLayer != null && !_fenceLayer.Hidden &&
+            (DateTime.UtcNow - _fenceLayer.LastActivityUtc).TotalSeconds > FenceIdleHideSeconds)
+        {
+            _fenceLayer.HideFences();
+            HostLog.Write("空闲超时 → 围栏自动隐藏");
+        }
+    }
 
     public void ShowMainWindow()
     {

@@ -308,4 +308,38 @@ internal static class FenceNative
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern int ExtractIconEx(string szFileName, int nIconIndex,
         out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
+
+    // ---- Low-level mouse hook (WH_MOUSE_LL) for desktop double-click detection ----
+    // Used to toggle the fences overlay when the user double-clicks the empty desktop background.
+    // Fences overlay windows are click-through outside the boxes, so a plain WndProc on the overlay
+    // can never see a double-click on the desktop itself — we need a global low-level hook.
+    public const int WH_MOUSE_LL = 14;
+    public const int SM_CXDOUBLECLK = 36;
+    public const int SM_CYDOUBLECLK = 37;
+
+    public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn,
+        IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern int GetDoubleClickTime();
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MSLLHOOKSTRUCT
+    {
+        public POINT pt;
+        public uint mouseData;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
 }

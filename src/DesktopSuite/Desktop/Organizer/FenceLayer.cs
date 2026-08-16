@@ -78,6 +78,13 @@ public sealed class FenceLayer
     private string? _className;
     private NativeMethods.WndProc _wndProc; // held alive: the OS keeps a raw pointer to it
 
+    // ---- M3.30: hide/show overlay + idle auto-hide ----
+    // The overlay can be hidden (collapsed to nothing) on demand — double-click empty desktop,
+    // idle timeout, or tray icon — without tearing down the window. ShowWindow(SW_HIDE) makes the
+    // layered child fully invisible and click-through; SW_SHOW restores it.
+    private bool _hidden;
+    private DateTime _lastActivityUtc = DateTime.UtcNow;
+
     // Diagnostic full-window overlay: was ON to confirm layered compositing under the desktop WorkerW.
     // Milestone 2 is now ACTIVE — real per-box rendering is on and this is off. Flip to true only to
     // re-run the "full-screen dark" compositing check. Click-through is provided by SetWindowRgn
@@ -803,6 +810,7 @@ public sealed class FenceLayer
 
     private void OnLButtonDown(int x, int y)
     {
+        TouchActivity();
         // Custom box-resize: if the press is within the bottom-right resize zone of a box,
         // start a resize of that specific box (layered+noactivate windows can't use WS_THICKFRAME).
         int rz = HitResizeZone(x, y);
@@ -878,6 +886,7 @@ public sealed class FenceLayer
 
     private void OnMouseMove(int x, int y, bool lButton)
     {
+        TouchActivity();
         // ---- Item drag between categories ----
         // Promote a pending item press into a real drag once the pointer passes the threshold.
         if (_pendingItem.HasValue && _dragItemCat == null)
@@ -982,6 +991,7 @@ public sealed class FenceLayer
 
     private void OnLButtonUp(int x, int y)
     {
+        TouchActivity();
         // A press that never became a drag (plain click) just clears the pending state.
         if (_pendingItem.HasValue && _dragItemCat == null)
         {
@@ -1117,6 +1127,7 @@ public sealed class FenceLayer
 
     private void OnLButtonDblClk(int x, int y)
     {
+        TouchActivity();
         // A double-click on the TITLE also fires the DOWN/DOWN that started a drag; the second
         // WM_LBUTTONUP is replaced by WM_LBUTTONDBLCLK, so _dragCat/capture would otherwise leak and
         // later mouse moves would keep dragging the box. Finalize any in-progress drag first.
@@ -1189,6 +1200,7 @@ public sealed class FenceLayer
 
     private void OnContextMenu(int x, int y)
     {
+        TouchActivity();
         var hit = HitTest(x, y);
         if (hit.Zone == HitZone.None || hit.BoxIndex < 0) return;
         var b = _boxRects[hit.BoxIndex];
@@ -1892,6 +1904,53 @@ public sealed class FenceLayer
         {
             HostLog.Write("FenceLayer.Close 失败", ex);
         }
+    }
+
+    // ---- M3.30: hide/show overlay + idle activity tracking ----
+
+    /// <summary>The underlying Win32 window handle. Exposed so the desktop double-click hook can
+    /// distinguish a double-click on the overlay boxes from one on the bare desktop.</summary>
+    public IntPtr Hwnd => _hwnd;
+
+    /// <summary>True when the overlay is hidden (collapsed away). Hidden overlays are fully
+    /// click-through and invisible, so they neither intercept input nor obscure the desktop.</summary>
+    public bool Hidden => _hidden;
+
+    /// <summary>UTC timestamp of the last user interaction with the overlay. The idle timer in
+    /// MainWindow uses this to auto-hide after a period of no activity.</summary>
+    public DateTime LastActivityUtc => _lastActivityUtc;
+
+    /// <summary>Record a user interaction so the idle auto-hide timer does not fire prematurely.</summary>
+    public void TouchActivity() => _lastActivityUtc = DateTime.UtcNow;
+
+    /// <summary>Hide the overlay (double-click desktop / idle / tray). Fully invisible + click-through.</summary>
+    public void HideFences()
+    {
+        if (_hwnd != IntPtr.Zero && !_hidden)
+        {
+            NativeMethods.ShowWindow(_hwnd, FenceNative.SW_HIDE);
+            _hidden = true;
+            HostLog.Write("FenceLayer.HideFences：已隐藏（SW_HIDE）");
+        }
+    }
+
+    /// <summary>Show the overlay again (double-click desktop / tray). Refreshes the idle timer.</summary>
+    public void ShowFences()
+    {
+        if (_hwnd != IntPtr.Zero && _hidden)
+        {
+            NativeMethods.ShowWindow(_hwnd, FenceNative.SW_SHOW);
+            _hidden = false;
+            _lastActivityUtc = DateTime.UtcNow;
+            HostLog.Write("FenceLayer.ShowFences：已显示（SW_SHOW）");
+        }
+    }
+
+    /// <summary>Toggle between hidden and shown.</summary>
+    public void ToggleHidden()
+    {
+        if (_hidden) ShowFences();
+        else HideFences();
     }
 
     /// <summary>Per-monitor DPI scale (DPI/96) for this window, used by the box-region math. Falls back
