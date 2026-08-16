@@ -2008,7 +2008,17 @@ public sealed class FenceLayer
         foreach (var p in paths)
         {
             if (string.IsNullOrWhiteSpace(p)) continue;
-            if (!cat.MemberPaths.Contains(p)) { cat.MemberPaths.Add(p); added++; }
+            // M3.28: Check ALL categories to prevent duplicates across boxes.
+            if (cat.MemberPaths.Contains(p)) continue;
+            bool existsElsewhere = false;
+            foreach (var other in _layout.Categories)
+            {
+                if (other != cat && other.MemberPaths.Contains(p))
+                { existsElsewhere = true; break; }
+            }
+            if (existsElsewhere) continue;
+            cat.MemberPaths.Add(p);
+            added++;
         }
         if (added == 0) return;
         BuildBoxes();

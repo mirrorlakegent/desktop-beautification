@@ -672,7 +672,21 @@ public partial class MainWindow : Window
     {
         var layout = _fenceStore.Load();
         var items = DesktopItemEnumerator.Enumerate();
-        FenceClassifier.Apply(items, layout.Categories, layout.Overrides);
+
+        // M3.28: Only auto-classify on FIRST run (no saved member paths).
+        // Once the user has manually organized items (import/drag), those MemberPaths
+        // are the source of truth. Re-classifying would overwrite user's layout.
+        bool hasExistingMembers = layout.Categories.Any(c => c.MemberPaths.Count > 0);
+        if (!hasExistingMembers)
+        {
+            FenceClassifier.Apply(items, layout.Categories, layout.Overrides);
+            HostLog.Write("EnableFences：首次运行，自动分类完成。");
+        }
+        else
+        {
+            HostLog.Write($"EnableFences：跳过自动分类（已保存 {layout.Categories.Sum(c => c.MemberPaths.Count)} 个成员路径），保留用户手动整理。");
+        }
+
         HostLog.Write($"EnableFences：入口 items={items.Count} categories={layout.Categories.Count} FencesEnabled(旧)={layout.FencesEnabled}");
         _fenceLayer = new FenceLayer();
         _fenceLayer.Show(items.ToArray(), layout);
