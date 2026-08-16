@@ -1,4 +1,6 @@
 using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Windows.Forms;
 using DesktopSuite.Desktop;
 using DesktopSuite.Wallpaper;
@@ -33,9 +35,9 @@ public sealed class TrayManager : IDisposable
 
         _notify = new NotifyIcon
         {
-            Icon = MakeTrayIcon(),
+            Icon = LoadBrandTrayIcon(),
             Visible = true,
-            Text = "DesktopSuite — 动态壁纸"
+            Text = "DesktopSuite — 桌面美化"
         };
 
         var menu = new ContextMenuStrip();
@@ -165,24 +167,40 @@ public sealed class TrayManager : IDisposable
         form.ShowDialog();
     }
 
-    private static Icon MakeTrayIcon()
+    /// <summary>Load the brand tray icon (Sleek design) from the output directory.
+    /// Falls back to a simple hand-drawn icon if the file is missing.</summary>
+    private static Icon LoadBrandTrayIcon()
     {
-        const int size = 32;
-        using var bmp = new Bitmap(size, size);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
-        using var brush = new SolidBrush(Color.FromArgb(255, 190, 40, 170));
-        g.FillEllipse(brush, 3, 3, size - 6, size - 6);
-        using var white = new SolidBrush(Color.White);
-        var tri = new PointF[]
+        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tray_icon.png");
+        if (File.Exists(path))
         {
-            new(size * 0.38f, size * 0.30f),
-            new(size * 0.38f, size * 0.70f),
-            new(size * 0.70f, size * 0.50f),
-        };
-        g.FillPolygon(white, tri);
-        return Icon.FromHandle(bmp.GetHicon());
+            try
+            {
+                using var src = new Bitmap(path);
+                // Scale to standard tray icon size (48px for HiDPI-aware apps).
+                using var bmp = new Bitmap(48, 48, PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(src, 0, 0, 48, 48);
+                }
+                return Icon.FromHandle(bmp.GetHicon());
+            }
+            catch { /* fall through to fallback */ }
+        }
+
+        // Fallback: minimal hand-drawn icon when brand asset is missing.
+        const int size = 32;
+        using var fbmp = new Bitmap(size, size);
+        using var fg = Graphics.FromImage(fbmp);
+        fg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        fg.Clear(Color.Transparent);
+        using var brush = new SolidBrush(Color.FromArgb(255, 190, 40, 170));
+        fg.FillEllipse(brush, 3, 3, size - 6, size - 6);
+        using var white = new SolidBrush(Color.White);
+        var tri = new PointF[] { new(size * 0.38f, size * 0.30f), new(size * 0.38f, size * 0.70f), new(size * 0.70f, size * 0.50f) };
+        fg.FillPolygon(white, tri);
+        return Icon.FromHandle(fbmp.GetHicon());
     }
 
     public void Dispose()
