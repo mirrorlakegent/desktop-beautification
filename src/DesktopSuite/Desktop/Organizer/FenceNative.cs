@@ -233,6 +233,7 @@ internal static class FenceNative
     // AppendMenu flags
     public const uint MF_STRING = 0x0000;
     public const uint MF_GRAYED = 0x0001;
+    public const uint MF_SEPARATOR = 0x0800;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT

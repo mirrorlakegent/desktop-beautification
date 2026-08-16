@@ -1197,6 +1197,17 @@ public sealed class FenceLayer
 
         IntPtr hMenu = FenceNative.CreatePopupMenu();
         if (hMenu == IntPtr.Zero) return;
+
+        // --- Item-level remove: right-clicking an icon gives a "remove this icon" entry ---
+        if (hit.Zone == HitZone.Item && hit.ItemIndex >= 0 && hit.ItemIndex < b.Paths.Count)
+        {
+            string name = GetDisplayName(b.Paths[hit.ItemIndex]);
+            // Encode box index in thousands, item index in units: id = 4000 + boxIndex*1000 + itemIndex.
+            int mid = 4000 + hit.BoxIndex * 1000 + hit.ItemIndex;
+            FenceNative.AppendMenu(hMenu, FenceNative.MF_STRING, (UIntPtr)mid, $"从此盒子移除「{name}」");
+            FenceNative.AppendMenu(hMenu, FenceNative.MF_SEPARATOR, UIntPtr.Zero, null);
+        }
+
         // Encode the category index into the menu id (1000 + index) so WM_COMMAND knows the target.
         FenceNative.AppendMenu(hMenu, canDelete ? FenceNative.MF_STRING : FenceNative.MF_GRAYED,
             (UIntPtr)(1000 + b.CategoryIndex),
@@ -1216,7 +1227,13 @@ public sealed class FenceLayer
     private void OnContextCommand(int id)
     {
         if (_layout == null) return;
-        if (id >= 1000 && id < 2000)
+        if (id >= 4000 && id < 5000)
+        {
+            int boxIndex = (id - 4000) / 1000;
+            int itemIndex = (id - 4000) % 1000;
+            RemoveItemFromBox(boxIndex, itemIndex);
+        }
+        else if (id >= 1000 && id < 2000)
         {
             DeleteCategory(id - 1000);
         }
@@ -1228,6 +1245,25 @@ public sealed class FenceLayer
         {
             ImportEntireDesktop(id - 3000);
         }
+    }
+
+    /// <summary>Remove a single icon from its box (does NOT delete the file; just un-links it from
+    /// the fence). Persisted immediately so the change survives restart.</summary>
+    private void RemoveItemFromBox(int boxIndex, int itemIndex)
+    {
+        if (_layout == null || boxIndex < 0 || boxIndex >= _boxRects.Count) return;
+        var b = _boxRects[boxIndex];
+        if (b.CategoryIndex < 0 || b.CategoryIndex >= _layout.Categories.Count) return;
+        var cat = _layout.Categories[b.CategoryIndex];
+        if (itemIndex < 0 || itemIndex >= cat.MemberPaths.Count) return;
+
+        string path = cat.MemberPaths[itemIndex];
+        cat.MemberPaths.RemoveAt(itemIndex);
+        HostLog.Write($"FenceLayer 移除图标：{path} from {cat.DisplayName}（剩余 {cat.MemberPaths.Count}）");
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 移除图标落盘失败", ex); }
     }
 
     private void DeleteCategory(int index)
