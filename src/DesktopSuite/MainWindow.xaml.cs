@@ -276,6 +276,20 @@ public partial class MainWindow : Window
         ShowMainWindow();
     }
 
+    /// <summary>Tray "撤销删除分类" — restores the most recently deleted fence box + its icons.</summary>
+    public void UndoFenceCategoryDelete()
+    {
+        if (_fenceLayer == null) return;
+        _fenceLayer.UndoLastCategoryDelete();
+        _tray?.RefreshUndoItem();
+    }
+
+    /// <summary>Whether a deleted category can still be undone (drives the tray menu item state).</summary>
+    public bool CanUndoFenceCategoryDelete => _fenceLayer?.CanUndoCategoryDelete ?? false;
+
+    /// <summary>Name of the most recently deleted category, for the tray menu label.</summary>
+    public string? PendingUndoCategoryName => _fenceLayer?.PendingUndoCategoryName;
+
     /// <summary>Low-level hook callback: a double-click was detected somewhere on screen. Toggle the
     /// overlay only when it landed on the bare desktop (not on a fence box, not on another window).</summary>
     private void OnDesktopDoubleClick(int x, int y)
@@ -765,6 +779,7 @@ public partial class MainWindow : Window
         HostLog.Write($"EnableFences：入口 items={items.Count} categories={layout.Categories.Count} FencesEnabled(旧)={layout.FencesEnabled}");
         _fenceLayer = new FenceLayer();
         _fenceLayer.Show(items.ToArray(), layout);
+        _fenceLayer.UndoStateChanged += () => _tray?.RefreshUndoItem();
         HostLog.Write("EnableFences：_fenceLayer.Show 已调用（窗口创建结果见 FenceLayer 日志）。");
         layout.FencesEnabled = true;
         _fenceStore.Save(layout);

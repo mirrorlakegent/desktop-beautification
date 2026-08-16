@@ -9,6 +9,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using DesktopSuite.Wallpaper;
 
 namespace DesktopSuite.Desktop.Organizer;
@@ -98,6 +99,15 @@ public sealed class FenceLayer
     private int _dragBoxIndex = -1;       // box index of the box currently being moved (for reorder swap)
     private double _dragOrigX, _dragOrigY; // saved cat.X/Y BEFORE drag started (for clean reorder swap)
     private DateTime _lastDragPaint = DateTime.MinValue;
+
+    // ---- Undo support for accidental category deletion ----
+    // Each deletion snapshots the removed category (geometry + members) plus the paths re-homed into
+    // 未分类, so a mistaken delete can be fully restored. A small stack keeps the last few deletions.
+    private readonly List<UndoEntry> _undoStack = new();
+    private const int MaxUndoEntries = 10;
+    public event Action? UndoStateChanged;
+
+    private sealed record UndoEntry(FenceCategory Category, int OriginalIndex, List<string> MovedPaths);
 
     // Custom box-resize state (layered+noactivate windows can't use WS_THICKFRAME reliably).
     // _resizeDir: 0=none, 3=box bottom-right corner drag.
@@ -1287,6 +1297,19 @@ public sealed class FenceLayer
         var cat = _layout.Categories[index];
         if (cat.Id == FenceConstants.UncategorizedId) return; // built-in, immutable
 
+        // Confirm first — deletion is destructive, so make the consequence explicit (icon count).
+        // This is the first line of defence against accidental deletes.
+        var dlg = MessageBox.Show(
+            $"确定要删除分类「{cat.DisplayName}」吗？\n\n其 {cat.MemberPaths.Count} 个图标将移回「未分类」。\n（删除后仍可在系统托盘菜单中撤销）",
+            "删除分类",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+        if (dlg != DialogResult.Yes) return;
+
+        // Snapshot for undo BEFORE mutating anything.
+        _undoStack.Add(new UndoEntry(cat, index, cat.MemberPaths.ToList()));
+        if (_undoStack.Count > MaxUndoEntries) _undoStack.RemoveAt(0);
+
         // Re-home members into the uncategorized box so they are not lost.
         var unc = _layout.Categories.FirstOrDefault(c => c.Id == FenceConstants.UncategorizedId);
         if (unc != null && cat.MemberPaths != null)
@@ -1297,8 +1320,46 @@ public sealed class FenceLayer
         ApplyRegion();
         UpdateVisual();
         try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 删除落盘失败", ex); }
-        HostLog.Write($"FenceLayer 删除分类：{cat.DisplayName}");
+        HostLog.Write($"FenceLayer 删除分类：{cat.DisplayName}（可撤销，撤销栈 {_undoStack.Count}）");
+        UndoStateChanged?.Invoke();
     }
+
+    /// <summary>Restore the most recently deleted category — its box (with original geometry) and all
+    /// its member icons. No-op if nothing is pending. Safe to call repeatedly to walk back several
+    /// deletions.</summary>
+    public void UndoLastCategoryDelete()
+    {
+        if (_layout == null || _undoStack.Count == 0) return;
+        var entry = _undoStack[^1];
+        _undoStack.RemoveAt(_undoStack.Count - 1);
+
+        var cat = entry.Category;
+        var unc = _layout.Categories.FirstOrDefault(c => c.Id == FenceConstants.UncategorizedId);
+        if (unc != null && entry.MovedPaths != null)
+        {
+            // Pull the re-homed members back out of 未分类 (only the exact paths we moved).
+            foreach (var p in entry.MovedPaths)
+            {
+                int i = unc.MemberPaths.IndexOf(p);
+                if (i >= 0) unc.MemberPaths.RemoveAt(i);
+            }
+        }
+
+        // Re-insert at the (clamped) original slot. Geometry lives on the category object, so the box
+        // returns to its old position regardless of the current list order.
+        int insertAt = Math.Min(entry.OriginalIndex, _layout.Categories.Count);
+        _layout.Categories.Insert(insertAt, cat);
+
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        try { FenceStore.Current.Save(_layout); } catch (Exception ex) { HostLog.Write("FenceLayer 撤销删除落盘失败", ex); }
+        HostLog.Write($"FenceLayer 撤销删除分类：{cat.DisplayName}（剩余撤销栈 {_undoStack.Count}）");
+        UndoStateChanged?.Invoke();
+    }
+
+    public bool CanUndoCategoryDelete => _undoStack.Count > 0;
+    public string? PendingUndoCategoryName => _undoStack.Count > 0 ? _undoStack[^1].Category.DisplayName : null;
 
     private void UpdateVisual()
     {

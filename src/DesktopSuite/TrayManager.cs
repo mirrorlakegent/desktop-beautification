@@ -17,6 +17,7 @@ public sealed class TrayManager : IDisposable
     private readonly ToolStripMenuItem _soundItem;
     private readonly ToolStripMenuItem _launchItem;
     private readonly ToolStripMenuItem _iconItem;
+    private readonly ToolStripMenuItem _undoItem;
     private readonly MainWindow _owner;
     private readonly WallpaperEngine _wallpaper;
     private readonly AppSettings _settings;
@@ -58,6 +59,14 @@ public sealed class TrayManager : IDisposable
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("显示主窗口", null, (_, _) => _owner.ShowMainWindow()));
         menu.Items.Add(new ToolStripMenuItem("🖼️ 立即轮换壁纸", null, (_, _) => _owner.RotateNow()));
+
+        // M3.31: undo for accidentally deleted fence categories. Disabled until a deletion happens.
+        _undoItem = new ToolStripMenuItem("↩ 撤销删除分类")
+        {
+            Enabled = false
+        };
+        _undoItem.Click += (_, _) => _owner.UndoFenceCategoryDelete();
+        menu.Items.Add(_undoItem);
 
         _iconItem = new ToolStripMenuItem("🗂️ 隐藏桌面图标：关");
         _iconItem.Click += (_, _) => _owner.ToggleHideIcons();
@@ -126,6 +135,16 @@ public sealed class TrayManager : IDisposable
                 _iconItem.Checked = false;
                 break;
         }
+    }
+
+    /// <summary>M3.31: reflect the fence-delete undo availability on the tray menu. The item is
+    /// greyed out until a category is deleted, then shows the name of the most recent one.</summary>
+    public void RefreshUndoItem()
+    {
+        if (_undoItem == null) return;
+        bool can = _owner.CanUndoFenceCategoryDelete;
+        _undoItem.Enabled = can;
+        _undoItem.Text = can ? $"↩ 撤销删除分类「{_owner.PendingUndoCategoryName}」" : "↩ 撤销删除分类";
     }
 
     private void ShowVolumeForm()
