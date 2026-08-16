@@ -1239,7 +1239,10 @@ public sealed class FenceLayer
     private void OnContextCommand(int id)
     {
         if (_layout == null) return;
-        if (id >= 4000 && id < 5000)
+        // Remove-icon command ids are always >= 4000 (1000+ and 2000+/3000+ ranges stay below 4000),
+        // so this branch must cover EVERY box index, not just box 0. Removing the upper bound fixes
+        // the bug where icons could only be removed from the uncategorized box.
+        if (id >= 4000)
         {
             int boxIndex = (id - 4000) / 1000;
             int itemIndex = (id - 4000) % 1000;
