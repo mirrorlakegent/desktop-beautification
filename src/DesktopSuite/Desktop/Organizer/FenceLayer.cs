@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Win32;
 using DesktopSuite.Wallpaper;
 
 namespace DesktopSuite.Desktop.Organizer;
@@ -1751,42 +1752,29 @@ public sealed class FenceLayer
         if (_iconCache.TryGetValue(fullPath, out var cached)) return cached;
         try
         {
-            // ---- System icons (::CLSID paths): prefer SHGetStockIconInfo (official API,
-            // always returns the correct OS-version-appropriate icon). Fall back to
-            // ExtractIconEx from system DLLs only if the stock API fails. ----
-            string? extractDll = null;
-            int extractIdx = -1;
-            int siid = 0;
+            // ---- System icons (::CLSID paths) ----
+            // PRIMARY (version-correct & authoritative): read the icon source straight from the
+            // CLSID's registered DefaultIcon — this is exactly how Explorer resolves these icons,
+            // so it is correct for every Windows version. The registry value is "dll,index" where
+            // index is NEGATIVE for a resource ID; ExtractIconEx accepts the negative value directly.
+            // SHGetStockIconInfo is kept only as a last-resort fallback (it is unreliable in some
+            // process contexts — e.g. it returns E_INVALIDARG here).
             bool isSystemIcon = false;
+            int siid = 0;
             if (fullPath.Equals("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", StringComparison.OrdinalIgnoreCase))
-                { siid = FenceNative.SIID_COMPUTER; extractDll = Environment.SystemDirectory + "\\imageres.dll"; extractIdx = 109; isSystemIcon = true; }   // 此电脑
+                { siid = FenceNative.SIID_COMPUTER; isSystemIcon = true; }    // 此电脑
             else if (fullPath.Equals("::{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase))
-                { siid = FenceNative.SIID_RECYCLEBIN; extractDll = Environment.SystemDirectory + "\\imageres.dll"; extractIdx = 49; isSystemIcon = true; }    // 回收站
+                { siid = FenceNative.SIID_RECYCLEBIN; isSystemIcon = true; }  // 回收站
             else if (fullPath.Equals("::{21EC2020-3AEA-1069-A2DD-08002B30309D}", StringComparison.OrdinalIgnoreCase))
-                { siid = FenceNative.SIID_CONTROLPANEL; extractDll = Environment.SystemDirectory + "\\shell32.dll"; extractIdx = 21; isSystemIcon = true; }  // 控制面板
+                { siid = FenceNative.SIID_CONTROLPANEL; isSystemIcon = true; } // 控制面板
 
             if (isSystemIcon)
             {
-                // Primary: SHGetStockIconInfo — official, version-correct, no hard-coded index drift
-                var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
-                int hr = FenceNative.SHGetStockIconInfo(siid, FenceNative.SHGSI_ICON | FenceNative.SHGSI_LARGEICON, out sii);
-                if (hr == 0 && sii.hIcon != IntPtr.Zero)
+                // Primary: registry DefaultIcon -> ExtractIconEx (signed index)
+                if (TryGetStockIconFromRegistry(fullPath, out var regDll, out var regIdx) && File.Exists(regDll))
                 {
-                    var bmp = IconToBitmap(sii.hIcon);
-                    FenceNative.DestroyIcon(sii.hIcon);
-                    if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
-                    HostLog.Write($"FenceLayer SHGetStockIconInfo 成功但 ToBitmap 失败: siid={siid}, 尝试 ExtractIconEx fallback");
-                }
-                else
-                {
-                    HostLog.Write($"FenceLayer SHGetStockIconInfo 失败(hr=0x{hr:X8} siid={siid}), 尝试 ExtractIconEx fallback");
-                }
-
-                // Fallback: ExtractIconEx with hard-coded index (may be wrong on some Windows versions)
-                if (extractDll != null && File.Exists(extractDll))
-                {
-                    IntPtr hLarge, hSmall;
-                    int n = FenceNative.ExtractIconEx(extractDll, extractIdx, out hLarge, out hSmall, 1);
+                    IntPtr hLarge = IntPtr.Zero, hSmall = IntPtr.Zero;
+                    int n = FenceNative.ExtractIconEx(regDll, regIdx, out hLarge, out hSmall, 1);
                     if (n > 0 && hLarge != IntPtr.Zero)
                     {
                         var bmp = IconToBitmap(hLarge);
@@ -1794,7 +1782,25 @@ public sealed class FenceLayer
                         if (hSmall != IntPtr.Zero) FenceNative.DestroyIcon(hSmall);
                         if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
                     }
-                    HostLog.Write($"FenceLayer ExtractIconEx fallback 也失败: dll={extractDll} idx={extractIdx}");
+                    HostLog.Write($"FenceLayer 注册表图标 ExtractIconEx 失败: dll={regDll} idx={regIdx} n={n}");
+                }
+                else
+                {
+                    HostLog.Write($"FenceLayer 未从注册表取到系统图标: path={fullPath}");
+                }
+
+                // Last-resort fallback: SHGetStockIconInfo (official API)
+                var sii = new FenceNative.SHSTOCKICONINFO { cbSize = Marshal.SizeOf<FenceNative.SHSTOCKICONINFO>() };
+                int hr = FenceNative.SHGetStockIconInfo(siid, FenceNative.SHGSI_ICON | FenceNative.SHGSI_LARGEICON, out sii);
+                if (hr == 0 && sii.hIcon != IntPtr.Zero)
+                {
+                    var bmp = IconToBitmap(sii.hIcon);
+                    FenceNative.DestroyIcon(sii.hIcon);
+                    if (bmp != null) { _iconCache[fullPath] = bmp; return bmp; }
+                }
+                else
+                {
+                    HostLog.Write($"FenceLayer SHGetStockIconInfo 也失败(hr=0x{hr:X8} siid={siid})");
                 }
             }
 
@@ -1831,6 +1837,39 @@ public sealed class FenceLayer
             return icon.ToBitmap();
         }
         catch { return null; }
+    }
+
+    /// <summary>Resolve a well-known system CLSID path (e.g. "::{20D04FE0-...}") to its registered
+    /// icon source. Reads HKCR\CLSID\{guid}\DefaultIcon whose default value is formatted
+    /// "dllpath,index" (index is NEGATIVE for a resource ID on stock Windows icons). This mirrors
+    /// exactly how Explorer resolves 此电脑 / 回收站 / 控制面板, so the result is always the
+    /// correct icon for the current OS version.</summary>
+    private static bool TryGetStockIconFromRegistry(string clsidPath, out string? dllPath, out int iconIndex)
+    {
+        dllPath = null;
+        iconIndex = 0;
+        try
+        {
+            var guid = clsidPath.TrimStart(':', '{').TrimEnd('}');
+            if (!Guid.TryParse(guid, out _)) return false;
+            using var key = Registry.ClassesRoot.OpenSubKey($@"CLSID\{{{guid}}}\DefaultIcon");
+            var raw = key?.GetValue("") as string;
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+
+            // "C:\WINDOWS\System32\imageres.dll,-109"  (may be quoted)
+            raw = raw.Trim().Trim('"');
+            int comma = raw.LastIndexOf(',');
+            if (comma < 0) { dllPath = raw; iconIndex = 0; return !string.IsNullOrEmpty(dllPath); }
+
+            dllPath = raw.Substring(0, comma).Trim().Trim('"');
+            if (!int.TryParse(raw.Substring(comma + 1).Trim(), out iconIndex)) iconIndex = 0;
+            return !string.IsNullOrEmpty(dllPath);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write($"FenceLayer 读取系统图标注册表失败: path={clsidPath}", ex);
+            return false;
+        }
     }
 
     private void ClearIconCache()
