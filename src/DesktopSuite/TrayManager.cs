@@ -20,6 +20,7 @@ public sealed class TrayManager : IDisposable
     private readonly ToolStripMenuItem _launchItem;
     private readonly ToolStripMenuItem _iconItem;
     private readonly ToolStripMenuItem _undoItem;
+    private readonly ToolStripMenuItem _arrowItem;
     private readonly MainWindow _owner;
     private readonly WallpaperEngine _wallpaper;
     private readonly AppSettings _settings;
@@ -74,6 +75,12 @@ public sealed class TrayManager : IDisposable
         _iconItem.Click += (_, _) => _owner.ToggleHideIcons();
         menu.Items.Add(_iconItem);
 
+        _arrowItem = new ToolStripMenuItem("🚫 隐藏快捷方式箭头：关");
+        _arrowItem.Click += (_, _) => _owner.ToggleHideShortcutArrows();
+        menu.Items.Add(_arrowItem);
+
+        menu.Items.Add(new ToolStripMenuItem("🔄 重启资源管理器（刷新外壳）", null, (_, _) => _owner.RestartExplorerFromTray()));
+
         _launchItem = new ToolStripMenuItem("🚀 开机自启：关");
         _launchItem.Click += (_, _) => _owner.ToggleLaunchOnBoot();
         menu.Items.Add(_launchItem);
@@ -98,6 +105,7 @@ public sealed class TrayManager : IDisposable
         RefreshSoundLabel();
         RefreshLaunchOnBootLabel();
         RefreshIconLabel();
+        RefreshArrowLabel();
     }
 
     public void RefreshSoundLabel()
@@ -137,6 +145,14 @@ public sealed class TrayManager : IDisposable
                 _iconItem.Checked = false;
                 break;
         }
+    }
+
+    /// <summary>P1: reflect the shortcut-arrow tweak state on the tray menu.</summary>
+    public void RefreshArrowLabel()
+    {
+        bool on = _owner.ShortcutArrowsHidden;
+        _arrowItem.Text = on ? "🚫 隐藏快捷方式箭头：开" : "🚫 隐藏快捷方式箭头：关";
+        _arrowItem.Checked = on;
     }
 
     /// <summary>M3.31: reflect the fence-delete undo availability on the tray menu. The item is

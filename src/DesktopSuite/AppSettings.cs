@@ -42,6 +42,10 @@ public sealed class AppSettings
     /// <summary>Name of the last applied desktop scene, if any.</summary>
     public string? ActiveSceneName { get; set; }
 
+    /// <summary>P1: when true, hide the shortcut-arrow overlay on desktop icons via a per-user
+    /// Shell Icons registry tweak (no admin needed). Applied on startup and toggleable from the tray.</summary>
+    public bool HideShortcutArrows { get; set; }
+
     private static readonly string FilePath =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                      "DesktopSuite", "settings.json");

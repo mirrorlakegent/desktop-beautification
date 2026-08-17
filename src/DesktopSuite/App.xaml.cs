@@ -31,14 +31,33 @@ public partial class App : Application
             return;
         }
 
-        // Single-instance guard (GUI only — the renderer host above is exempt). If another GUI
-        // instance is already running, nudge it to show its window and bail out.
-        _singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out bool createdNew);
-        if (!createdNew)
+        // P1.5: single-instance guard (GUI only — the renderer host above is exempt).
+        // Use initiallyOwned=false so we never re-enter a mutex the current thread already holds; we
+        // acquire it explicitly below. This also lets us RECOVER from an ABANDONED mutex left by a
+        // previous instance that crashed without releasing it — otherwise a crash would block all
+        // future relaunch until the kernel object was cleared by something else.
+        _singleInstanceMutex = new Mutex(false, SingleInstanceMutexName, out bool createdNew);
+        if (createdNew)
         {
-            try { using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName); ev.Set(); } catch { }
-            Shutdown();
-            return;
+            // We created it (unowned) — take ownership now.
+            _singleInstanceMutex.WaitOne();
+        }
+        else
+        {
+            // The mutex already existed. Distinguish a live second instance from a crashed one:
+            // WaitOne(0) returns false if a live owner holds it (-> defer and exit), or throws
+            // AbandonedMutexException if the prior owner died (-> we legitimately take over).
+            bool liveInstance = true;
+            try { if (_singleInstanceMutex.WaitOne(0)) liveInstance = false; }
+            catch (AbandonedMutexException) { liveInstance = false; }
+
+            if (liveInstance)
+            {
+                try { using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName); ev.Set(); } catch { }
+                Shutdown();
+                return;
+            }
+            // else: sole instance recovered from an abandoned mutex — continue normally.
         }
         _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
         ThreadPool.QueueUserWorkItem(_ =>

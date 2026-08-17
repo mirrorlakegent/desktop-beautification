@@ -111,6 +111,12 @@ public partial class MainWindow : Window
         if (_fenceStore.Load().FencesEnabled)
             ApplyFencesWithRetryIfEnabled();
 
+        // P1: re-apply the "hide shortcut arrows" desktop tweak if it was enabled last session.
+        // Restarts Explorer only when the registry value is out of sync (e.g. it was cleared),
+        // so a normal relaunch is silent — the change already took effect on the previous run.
+        try { ShellTweaks.ApplyHideShortcutArrows(_settings.HideShortcutArrows, forceRestartExplorer: false); }
+        catch (Exception ex) { HostLog.Write("应用去箭头设置失败", ex); }
+
         // The tray icon is the always-available control surface; it persists after the window is
         // closed (we minimise-to-tray, so the GUI process stays alive to own the icon).
         _tray = new TrayManager(this, _wallpaper, _settings, _iconHider, _scenes);
@@ -684,6 +690,51 @@ public partial class MainWindow : Window
             return;
         }
         RunIconApply(current != IconVisibility.Hidden);
+    }
+
+    // ---- Desktop organization (P1): hide shortcut arrows ----
+
+    /// <summary>Whether the shortcut-arrow tweak is currently active (registry in sync with intent).</summary>
+    public bool ShortcutArrowsHidden => ShellTweaks.IsHideShortcutArrowsEnabled();
+
+    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Applies the per-user registry
+    /// tweak and restarts Explorer so the change is visible immediately.</summary>
+    public void ToggleHideShortcutArrows()
+    {
+        bool enable = !_settings.HideShortcutArrows;
+        _settings.HideShortcutArrows = enable;
+        _settings.Save();
+        try
+        {
+            ShellTweaks.ApplyHideShortcutArrows(enable, forceRestartExplorer: false);
+            Status.Text = enable
+                ? "已隐藏快捷方式箭头（正在重启资源管理器…）"
+                : "已恢复快捷方式箭头（正在重启资源管理器…）";
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("去箭头切换失败", ex);
+            Status.Text = $"去箭头切换失败：{ex.Message}";
+        }
+        _tray?.RefreshArrowLabel();
+    }
+
+    // ---- Desktop organization (P1): shell refresh ----
+
+    /// <summary>Force a full Explorer restart from the tray. Use after shell tweaks (e.g. hiding
+    /// shortcut arrows) if the icon cache didn't refresh via the lightweight SHChangeNotify path.</summary>
+    public void RestartExplorerFromTray()
+    {
+        try
+        {
+            ShellTweaks.RestartExplorer();
+            Status.Text = "已重启资源管理器（外壳刷新完成）";
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("重启资源管理器失败", ex);
+            Status.Text = $"重启资源管理器失败：{ex.Message}";
+        }
     }
 
     // ---- Desktop organization (Phase 1+2): Fences (icon virtualization) ----
