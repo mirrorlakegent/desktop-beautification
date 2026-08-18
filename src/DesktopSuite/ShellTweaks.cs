@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Win32;
 using DesktopSuite.Wallpaper;
 
@@ -15,16 +16,13 @@ namespace DesktopSuite;
 /// built-in empty/transparent icon resource) makes the overlay invisible. We write it under
 /// <c>HKCU</c> (not HKLM), so it is a per-user override that takes effect with no UAC prompt.
 ///
-/// <para><b>How it works without restarting Explorer:</b></para>
-/// <list type="bullet">
-///   <item>Delete the user's icon cache database files (IconCache.db, iconcache_*.db).</item>
-///   <item>Broadcast <c>WM_SETTINGCHANGE</c> with "Shell Icons" so every top-level window (including
-///     Explorer's desktop/Taskbar window) re-reads the registry.</item>
-///   <item>Call <c>SHChangeNotify(SHCNE_ASSOCCHANGED)</c> for good measure.</item>
-/// </list>
-/// This three-step cache invalidation makes the arrow disappear immediately on Windows 10/11 without
-/// killing Explorer (which would also tear down the wallpaper WorkerW). A full Explorer restart is
-/// still offered as a manual tray action for edge cases where the lightweight refresh doesn't stick.
+/// <para><b>Important:</b> on Windows 10/11 the Shell Icons value is only read when Explorer starts.
+/// SHChangeNotify / WM_SETTINGCHANGE / cache deletion alone do NOT make it take effect at runtime
+/// (verified on Windows 11 build 26200). The reliable path is therefore to <b>restart Explorer</b>
+/// via <see cref="RestartExplorer"/>. Callers that depend on the desktop shell (wallpaper WorkerW,
+/// hidden icons) must re-apply their state after the restart — <see cref="RestartExplorer"/> blocks
+/// until Progman is back so they can do so safely. The lightweight <c>InvalidateIconCache</c> path is
+/// kept as a best-effort fallback for older Windows builds where it still helps.
 /// </summary>
 public static class ShellTweaks
 {
@@ -196,7 +194,14 @@ public static class ShellTweaks
     [DllImport("shell32.dll")]
     private static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
 
-    /// <summary>Kill and relaunch the Explorer shell so the icon-cache change becomes visible.</summary>
+    /// <summary>
+    /// Kill and relaunch the Explorer shell so the Shell Icons change (and any other registry-based
+    /// shell tweak) takes effect. Explorer is the only reliable way to make value 29 apply on
+    /// Windows 10/11 — SHChangeNotify alone does nothing for it.
+    ///
+    /// The method blocks until the desktop shell (Progman) is back, so callers can immediately
+    /// re-apply dependent state (wallpaper WorkerW, hidden icons) without racing a half-started shell.
+    /// </summary>
     public static void RestartExplorer()
     {
         try
@@ -210,7 +215,7 @@ public static class ShellTweaks
                 }
             };
             kill.Start();
-            kill.WaitForExit(2000);
+            kill.WaitForExit(3000);
         }
         catch (Exception ex)
         {
@@ -224,6 +229,20 @@ public static class ShellTweaks
         catch (Exception ex)
         {
             HostLog.Write("重启 explorer 失败", ex);
+            return;
         }
+
+        // Wait for the shell to come back so dependent re-apply (wallpaper, icons) finds a valid Progman.
+        for (int i = 0; i < 30; i++)
+        {
+            IntPtr progman = IntPtr.Zero;
+            try { progman = FindWindow("Progman", null); } catch { }
+            if (progman != IntPtr.Zero) return;
+            Thread.Sleep(200);
+        }
+        HostLog.Write("重启 explorer 后未检测到 Progman 窗口（超时，仍继续）");
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
 }

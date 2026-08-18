@@ -112,9 +112,19 @@ public partial class MainWindow : Window
             ApplyFencesWithRetryIfEnabled();
 
         // P1: re-apply the "hide shortcut arrows" desktop tweak if it was enabled last session.
-        // Restarts Explorer only when the registry value is out of sync (e.g. it was cleared),
-        // so a normal relaunch is silent — the change already took effect on the previous run.
-        try { ShellTweaks.ApplyHideShortcutArrows(_settings.HideShortcutArrows, forceRestartExplorer: false); }
+        // On Windows 10/11 the Shell Icons value is only read at Explorer startup, so if the registry
+        // is out of sync we MUST restart Explorer (forceRestartExplorer: true) for the arrows to hide.
+        // When the value already matches, nothing changes and no restart happens — a normal relaunch
+        // is silent because the previous run's Explorer restart already applied it.
+        try
+        {
+            bool changed = ShellTweaks.ApplyHideShortcutArrows(_settings.HideShortcutArrows, forceRestartExplorer: false);
+            if (changed && _settings.HideShortcutArrows)
+            {
+                // Registry was out of sync and we just wrote it — restart Explorer so it actually hides.
+                RestartExplorerAndRecover();
+            }
+        }
         catch (Exception ex) { HostLog.Write("应用去箭头设置失败", ex); }
 
         // The tray icon is the always-available control surface; it persists after the window is
@@ -698,7 +708,8 @@ public partial class MainWindow : Window
     public bool ShortcutArrowsHidden => ShellTweaks.IsHideShortcutArrowsEnabled();
 
     /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Applies the per-user registry
-    /// tweak and restarts Explorer so the change is visible immediately.</summary>
+    /// tweak and restarts Explorer so the change is visible immediately (the only reliable path on
+    /// Windows 10/11). Wallpaper + hidden-icon state are re-applied after the restart.</summary>
     public void ToggleHideShortcutArrows()
     {
         bool enable = !_settings.HideShortcutArrows;
@@ -706,10 +717,12 @@ public partial class MainWindow : Window
         _settings.Save();
         try
         {
+            // Write the registry value, then restart Explorer (lightweight refresh is ineffective on Win11).
             ShellTweaks.ApplyHideShortcutArrows(enable, forceRestartExplorer: false);
+            RestartExplorerAndRecover();
             Status.Text = enable
-                ? "已隐藏快捷方式箭头（正在重启资源管理器…）"
-                : "已恢复快捷方式箭头（正在重启资源管理器…）";
+                ? "已隐藏快捷方式箭头（已重启资源管理器）"
+                : "已恢复快捷方式箭头（已重启资源管理器）";
         }
         catch (Exception ex)
         {
@@ -721,20 +734,50 @@ public partial class MainWindow : Window
 
     // ---- Desktop organization (P1): shell refresh ----
 
-    /// <summary>Force a full Explorer restart from the tray. Use after shell tweaks (e.g. hiding
-    /// shortcut arrows) if the icon cache didn't refresh via the lightweight SHChangeNotify path.</summary>
+    /// <summary>Force a full Explorer restart from the tray, then re-apply wallpaper + icon-visibility
+    /// state (both live inside the shell that was just restarted).</summary>
     public void RestartExplorerFromTray()
     {
         try
         {
-            ShellTweaks.RestartExplorer();
-            Status.Text = "已重启资源管理器（外壳刷新完成）";
+            RestartExplorerAndRecover();
+            Status.Text = "已重启资源管理器（外壳刷新完成，壁纸与图标状态已恢复）";
         }
         catch (Exception ex)
         {
             HostLog.Write("重启资源管理器失败", ex);
             Status.Text = $"重启资源管理器失败：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Restart Explorer and restore the desktop state that lives inside it:
+    ///  1. Dynamic wallpaper (WorkerW is destroyed on restart) — re-apply the active scene.
+    ///  2. Hidden desktop icons (Explorer shows them again on restart) — re-apply DesiredIconsHidden.
+    /// Runs the re-apply off the UI thread so the restart (which blocks ~1-2s) never freezes the GUI.
+    /// </summary>
+    private void RestartExplorerAndRecover()
+    {
+        bool hadDynamic = _wallpaper.IsDynamicRunning;
+        bool hideIcons = _settings.DesiredIconsHidden;
+        string? scene = _settings.ActiveSceneName;
+
+        ShellTweaks.RestartExplorer(); // kills + restarts + waits for Progman
+
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                if (hadDynamic && !string.IsNullOrEmpty(scene))
+                    ApplyScene(scene);          // re-acquire WorkerW + re-launch renderer
+                if (hideIcons)
+                    _iconHider.Apply(true);     // re-hide desktop icons
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("资源管理器重启后恢复桌面状态失败", ex);
+            }
+        });
     }
 
     // ---- Desktop organization (Phase 1+2): Fences (icon virtualization) ----
