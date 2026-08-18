@@ -13,25 +13,30 @@ namespace DesktopSuite;
 ///
 /// P1 — Hide the shortcut-arrow overlay on desktop/explorer icons.
 ///
-/// Mechanism (verified on Windows 11 build 26200): we delete the <c>IsShortcut</c> registry value
-/// under the relevant HKCR progids (<c>lnkfile</c>, <c>piffile</c>, <c>InternetShortcut</c>). Windows
-/// keys off the *presence* of that value to decide whether to paint the little arrow overlay; removing
-/// it tells the shell "this is not a shortcut", so the arrow is never drawn. This is a completely
-/// different — and on build 26200, the only working — path versus the classic <c>Shell Icons</c> value
-/// 29, which that build ignores entirely (we tested shell32.dll,-50, a transparent .ico, and a manual
-/// Explorer restart; the arrow never disappeared via value 29).
+/// <para><b>Compatibility notice (2026-08-18):</b> ALL known programmatic methods for hiding
+/// shortcut arrows have been verified as <b>non-functional</b> on Windows 11 builds 26100+
+/// (including 26100.8972). Microsoft refactored the overlay rendering pipeline in shell32.dll
+/// to hard-code the arrow during icon composition, bypassing both the legacy
+/// <c>Shell Icons</c> value 29 and the <c>IsShortcut</c> registry marker. The
+/// <see cref="IsShortcutSupported"/> guard reflects this reality.</para>
 ///
-/// <para><b>Admin requirement:</b> the progid keys live under <c>HKLM</c>, so writing needs
-/// administrator rights; reading (to reflect tray state) does not. The GUI therefore launches a
-/// short-lived elevated copy of itself (via <c>runas</c>) to perform the write — see <see cref="App"/>'s
-/// <c>--apply-ishortcut</c> branch.</para>
+/// <para><b>Historical mechanisms tested (all failed on 26100+):</b></para>
+/// <list type="bullet">
+///   <item>Shell Icons value 29 → ignored (build 26200 first, now 26100 too)</item>
+///   <item>shell32.dll,-50 → ignored</item>
+///   <item>Transparent .ico file → ignored</item>
+///   <item>Deleting IsShortcut from HKCR progids → ignored (overlay no longer checks it)</item>
+/// </list>
 ///
-/// <para><b>Explorer restart:</b> the overlay change only takes effect when Explorer restarts. Callers
-/// must restart Explorer and re-apply shell-dependent state (wallpaper WorkerW, hidden icons)
-/// afterwards — <see cref="RestartExplorer"/> plus the caller's own recovery step.</para>
+/// <para><b>Admin requirement (for older Windows where supported):</b> the progid keys live under
+/// <c>HKLM</c>, so writing needs administrator rights; reading does not.</para>
 /// </summary>
 public static class ShellTweaks
 {
+    // Minimum build number where the hide-arrows feature is known broken.
+    // 26100 = Win11 24H2 RTM; confirmed broken on 26100.8972 (2026-08 cumulative update).
+    private const int MinBrokenBuild = 26100;
+
     // Progids whose IsShortcut marker we toggle. These cover the common shortcut types seen on the
     // desktop (.lnk files, .pif, and .url internet shortcuts).
     private static readonly string[] IsShortcutProgIds =
@@ -61,11 +66,21 @@ public static class ShellTweaks
     }
 
     /// <summary>
-    /// True when the arrow is currently hidden, i.e. the <c>IsShortcut</c> marker is ABSENT under
+    /// Returns true if the hide-shortcut-arrows mechanism is potentially supported on this
+    /// Windows build. On builds ≥ 26100 (Win11 24H2+ with 2026-08 cumulative updates) Microsoft
+    /// hard-codes the arrow in shell32.dll's icon pipeline, making all registry methods ineffective.
+    /// </summary>
+    public static bool IsShortcutSupported => Environment.OSVersion.Version.Build < MinBrokenBuild;
+
+    /// <summary>
+    /// True when the arrow is currently hidden (only meaningful on supported builds).
+    /// Checks whether the <c>IsShortcut</c> marker is ABSENT under
     /// <c>HKLM\Software\Classes\lnkfile</c>. Reading HKLM does not require admin.
+    /// Always returns <c>false</c> on unsupported builds.
     /// </summary>
     public static bool IsHideShortcutArrowsEnabled()
     {
+        if (!IsShortcutSupported) return false;
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(@"Software\Classes\lnkfile");
@@ -82,10 +97,16 @@ public static class ShellTweaks
     /// <summary>
     /// Delete (enable=true) or recreate (enable=false) the <c>IsShortcut</c> marker under HKLM for
     /// every tracked progid. <b>Requires administrator rights</b> — invoke from an elevated helper.
-    /// Returns true on success.
+    /// Returns true on success; returns false without side-effects on unsupported builds.
     /// </summary>
     public static bool ApplyIsShortcut(bool enable)
     {
+        if (!IsShortcutSupported)
+        {
+            HostLog.Write($"去箭头：当前 Windows 版本 (Build {Environment.OSVersion.Version.Build}) 不支持此功能，跳过");
+            return false;
+        }
+
         try
         {
             foreach (var progId in IsShortcutProgIds)

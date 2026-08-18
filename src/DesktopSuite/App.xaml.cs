@@ -35,9 +35,17 @@ public partial class App : Application
         // exit immediately. Runs BEFORE the single-instance mutex so it never collides with the live GUI
         // instance (which owns that mutex) — it must perform its registry write and terminate, with no
         // UI and no mutex handshake.
+        // NOTE: On Win11 26100+ this is a no-op (ApplyIsShortcut returns false) — the feature is
+        // unsupported due to Microsoft's shell32.dll icon pipeline refactor.
         int isIdx = Array.IndexOf(e.Args, "--apply-ishortcut");
         if (isIdx >= 0 && isIdx + 1 < e.Args.Length)
         {
+            if (!ShellTweaks.IsShortcutSupported)
+            {
+                HostLog.Write($"去箭头：Build {Environment.OSVersion.Version.Build} 不支持，跳过");
+                Environment.Exit(2);  // distinct code for "unsupported"
+                return;
+            }
             bool enable = e.Args[isIdx + 1].Equals("on", StringComparison.OrdinalIgnoreCase);
             int code = ShellTweaks.ApplyIsShortcut(enable) ? 0 : 1;
             Environment.Exit(code);

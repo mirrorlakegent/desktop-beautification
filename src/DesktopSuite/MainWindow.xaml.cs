@@ -698,11 +698,24 @@ public partial class MainWindow : Window
     /// <summary>Whether the shortcut-arrow tweak is currently active (registry in sync with intent).</summary>
     public bool ShortcutArrowsHidden => ShellTweaks.IsHideShortcutArrowsEnabled();
 
-    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Elevates (UAC) to write the
-    /// HKLM IsShortcut marker if we aren't already admin, then restarts Explorer so the change takes
-    /// effect. Wallpaper + hidden-icon state are re-applied after the restart.</summary>
+    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. On unsupported Windows builds
+    /// (26100+), shows an informational message instead of taking action.</summary>
     public void ToggleHideShortcutArrows()
     {
+        // Guard: on Win11 26100+ all known methods are broken — show message, don't touch registry.
+        if (!ShellTweaks.IsShortcutSupported)
+        {
+            var build = Environment.OSVersion.Version.Build;
+            MessageBox.Show(
+                $"您的 Windows 版本 (Build {build}) 不支持通过注册表隐藏快捷方式箭头。\n\n" +
+                "微软在最近的系统更新中改变了图标渲染机制，传统的 Shell Icons 和 IsShortcut 方法均已失效。\n\n" +
+                "建议：如需此功能，可使用 Winaero Tweaker 等第三方工具。",
+                "功能不可用",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
         bool enable = !_settings.HideShortcutArrows;
         _settings.HideShortcutArrows = enable;
         _settings.Save();
