@@ -1,11 +1,13 @@
 # M3 收官报告 · DesktopSuite 桌面整理（Fences）
 
-> 日期：2026-08-17 ｜ 分支：master ｜ 最新提交：见文末
-> 范围：M3 全部交互功能验收通过 + 收尾（双进程互斥锁加固、去快捷方式箭头、报告与清理）
+> 日期：2026-08-18（修订）｜ 分支：master ｜ 最新提交：`ace37b7`
+> 范围：M3 全部交互功能验收 + 收尾（双进程互斥锁加固、报告与清理）
+> **修订说明**：原 2026-08-17 版本声称「去快捷方式箭头」已通过 Shell Icons 值 29 生效，
+> 该方法随后经 6 轮真机实测被证伪，去箭头功能已于 `ace37b7` **正式禁用并移出 M3 范围**。本报告据此更正。
 
 ---
 
-## 一、M3 功能清单（已真机验收全绿 ✅）
+## 一、M3 功能清单（已真机验收 ✅）
 
 | 编号 | 功能 | 验收 |
 |---|---|---|
@@ -15,40 +17,60 @@
 | M3.34 | 品牌图标统一为 Sleek（魔法棒星光），应用 + 托盘多尺寸清晰 | ✅ |
 | M3.35/36 | 系统虚拟图标（此电脑 / 回收站 / 控制面板）按注册表 `DefaultIcon` 权威解析 | ✅ |
 
-6 项交互验收清单全部通过，系统图标显示正确。
+6 项核心交互验收清单全部通过，系统图标显示正确。
 
 ---
 
-## 二、本轮收尾实现（2026-08-17）
+## 二、本轮收尾实现（2026-08-17，保留）
 
 ### P1.5 双进程单实例锁 —— 核验 + 加固
 - **核验结论**：代码库自初始提交即已存在 `Mutex` 单实例锁（`App.xaml.cs`）+ `ShowEvent` 唤醒机制，渲染子进程 `--wallpaper-host` 被显式豁免；`DesktopDoubleClickHook` 在 `MainWindow` 仅创建/释放一次。故「两个 GUI 实例各装 `WH_MOUSE_LL` 钩子互相抵消双击 toggle」的隐患在已发布代码中**已被防住**。
 - **加固**：原锁用 `initiallyOwned=true`，若上一次实例崩溃留下「遗弃互斥体」，后续启动会误判为「已有实例」而拒绝启动。改为 `initiallyOwned=false` + 显式 `WaitOne`，并区分「活动实例」（`WaitOne(0)` 返回 false → 退出并唤醒）与「崩溃遗弃」（`AbandonedMutexException` → 接管并继续），崩溃后仍能正常重启。
-
-### P1 去快捷方式箭头
-- 新增 `ShellTweaks`：写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons` 值 `29` 指向随包发布的**全透明** `hide_arrow.ico`（32×32、32-bit BGRA、alpha=0）。走 `HKCU` 每用户覆盖，**无需管理员权限 / 无 UAC 弹窗**。
-- **刷新策略（关键取舍）**：默认用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 轻量刷新图标缓存，**不杀 Explorer、不扰壁纸**。原因：本项目壁纸引擎把 mpv 挂在 Explorer 的 `WorkerW` 上，重启 Explorer 会销毁旧 `WorkerW` 导致壁纸短暂丢失。故自动重启 Explorer 故意不做。
-- 托盘新增 **「🔄 重启资源管理器（刷新外壳）」** 手动项：供个别 Windows 版本 `SHChangeNotify` 未生效时，由用户主动强制刷新。
-- 新增设置 `HideShortcutArrows`（持久化到 `settings.json`）；启动自动套用（仅当注册表与意图不一致时才刷新，正常重启用无感）。
-- 托盘新增 **「🚫 隐藏快捷方式箭头」** 勾选项，实时反映开关状态。
+- （2026-08-18 排障补充）若旧实例窗口状态异常且不响应 show event，新实例会退出导致「打不开」——临时解法为任务管理器结束 `DesktopSuite` 进程再开；该加固已记入待办。
 
 ---
 
-## 三、已知问题 / 注意事项
-- `SHChangeNotify` 在绝大多数 Win10/11 上即可刷新箭头；若个别机器不生效，点托盘 **重启资源管理器** 即可（会短暂重建桌面外壳，壁纸随之重挂，属预期）。
+## 三、去快捷方式箭头（已禁用 · 移出 M3 范围）
+
+### 结论：Win11 26100+ 所有已知方法全部失效
+该功能是 M3 的附加项（非核心），尝试了 **4 类、共 6 个提交**的注册表方案，经真机实测**无一生效**：
+
+| # | 方法 | 结果 | 提交 |
+|---|------|------|------|
+| 1 | Shell Icons 值 29（自定义 ICO / shell32.dll,-50 / 透明 ICO 文件） | Win11 26100+ 无视 | 895dc36 / 2e2ec1e / b144d79 / 2326d65 |
+| 2 | 删除 HKLM `IsShortcut`（lnkfile/piffile/InternetShortcut） | 26100.8972 仍无视 | c4d9ede |
+
+**根因**：微软在 2026-08 累积更新中将快捷方式箭头绘制从「可配置的 overlay 系统」改为 `shell32.dll` 图标渲染管线**硬编码行为**。`ShellIconOverlayIdentifiers` 中已无 Arrow handler，箭头不再走扩展点，任何注册表级别方案都无法去除。
+
+### 处理（`ace37b7`）
+- `ShellTweaks` 加 `IsShortcutSupported` 版本守卫（Build ≥ 26100 返回 false）；`ApplyIsShortcut` / `IsHideShortcutArrowsEnabled` 在不支持版本上直接跳过。
+- 托盘「隐藏快捷方式箭头」改为弹 MessageBox 提示「功能不可用」，不再操作注册表。
+- 之前无效的 IsShortcut 删除操作已通过 UAC 自提升 **恢复注册表原值**（不留垃圾）。
+- 代码保留但标记为不兼容；UAC 自提升分支（`--apply-ishortcut`）保留供旧版 Windows 或未来恢复使用。
+
+### 对用户的影响与建议
+- 桌面箭头**不会消失**（系统级硬编码，任何程序都去不掉）。
+- 如需此功能，建议使用 [Winaero Tweaker](https://winaero.com/tweaker/)（可能采用更底层的注入/补丁）。
+
+---
+
+## 四、已知问题 / 注意事项
 - `FenceLayer.cs(1231)` 的 `CS8625` 可空警告为历史既有，与本轮无关。
-- `Shell Icons` 值 `29` 是系统级图标表覆盖，仅影响当前用户，不影响其他账户。
+- 单实例锁在「旧实例卡死且不响应 show event」时可能表现为「打不开」，临时解法见第二节补充。
+- 去箭头功能已从 M3 交付范围移除，不作为验收项。
 
 ---
 
-## 四、部署与验证状态
-- 构建：`dotnet publish -c Release -r win-x64 --self-contained true` 成功（退出码 0）。
-- 部署目录：`D:\WorkBuddy\ds2\`（含 `DesktopSuite.exe`、`hide_arrow.ico`、`tray_icon.ico`）。
-- 代码已提交并推送 gitee / github（master，SSH）。
-- 待用户真机验收：去箭头勾选后桌面快捷方式左下角箭头消失；如需彻底刷新点托盘「重启资源管理器」。
+## 五、部署与验证状态
+- 构建：`dotnet publish -c Release -r win-x64 --no-self-contained` 成功（退出码 0）。
+- 部署目录：`D:\WorkBuddy\ds2\`（含 `DesktopSuite.exe`）。
+- 代码已提交并推送 gitee / github（master，SSH，最新 `ace37b7`）。
+- 6 项核心功能验收状态见第一节（需用户按自身标准真机复验确认）。
 
 ---
 
-## 五、后续路线（建议）
-- 围栏布局导入 / 导出、场景市场、壁纸 + 围栏联动主题。
-- 如后续需要「全局」去箭头（影响所有用户），再评估 `HKLM` + 提权路径。
+## 六、后续路线（建议）
+见独立文档 `deliverables/M3_Roadmap_Next.md`：
+- 围栏布局导入 / 导出
+- 场景市场 / 壁纸 + 围栏联动主题
+- 去箭头仅在微软恢复可配置性或发现新方法后再评估重新启用
