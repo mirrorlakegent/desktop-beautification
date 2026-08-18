@@ -917,6 +917,7 @@ public partial class MainWindow : Window
         HostLog.Write($"EnableFences：入口 items={items.Count} categories={layout.Categories.Count} FencesEnabled(旧)={layout.FencesEnabled}");
         _fenceLayer = new FenceLayer();
         _fenceLayer.Show(items.ToArray(), layout);
+        _fenceLayer.SetAppearance(FenceAppearance.FromSettings(_settings));
         _fenceLayer.UndoStateChanged += () => _tray?.RefreshUndoItem();
         HostLog.Write("EnableFences：_fenceLayer.Show 已调用（窗口创建结果见 FenceLayer 日志）。");
         layout.FencesEnabled = true;
@@ -1014,6 +1015,43 @@ public partial class MainWindow : Window
         {
             HostLog.Write("导入布局失败", ex);
             MessageBox.Show($"导入布局失败：{ex.Message}", "导入失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    // ---- M4-B: fence box appearance customization ----
+
+    /// <summary>Open the appearance settings dialog (WinForms). Applies live-preview changes to the
+    /// active <see cref="_fenceLayer"/> and persists the chosen values to <see cref="_settings"/> on OK.</summary>
+    public void ShowAppearanceForm()
+    {
+        try
+        {
+            var original = FenceAppearance.FromSettings(_settings);
+            var working = original.Clone();
+            using var form = new FenceAppearanceForm(working, applied =>
+            {
+                // Live preview: mutate the in-memory settings + repaint. Persisted only on OK.
+                applied.ApplyTo(_settings);
+                _fenceLayer?.SetAppearance(applied);
+            });
+            var result = form.ShowDialog();
+            if (result == System.Windows.Forms.DialogResult.OK)
+            {
+                _settings.Save();
+                HostLog.Write("ShowAppearanceForm：用户确认，外观设置已保存。");
+            }
+            else
+            {
+                // Cancel: revert both the in-memory settings and the live visuals to the originals.
+                original.ApplyTo(_settings);
+                _fenceLayer?.SetAppearance(original);
+                HostLog.Write("ShowAppearanceForm：用户取消，回落到原外观。");
+            }
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("打开外观设置失败", ex);
+            MessageBox.Show($"打开外观设置失败：{ex.Message}", "外观设置", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

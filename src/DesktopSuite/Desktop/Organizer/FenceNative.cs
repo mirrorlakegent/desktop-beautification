@@ -21,6 +21,12 @@ internal static class FenceNative
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern IntPtr CreateRectRgn(int nLeftRect, int nTopRect, int nRightRect, int nBottomRect);
 
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern IntPtr CreateRoundRectRgn(int nLeftRect, int nTopRect, int nRightRect, int nBottomRect, int nWidthEllipse, int nHeightEllipse);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
+
     /// <summary>Combines two regions. fnCombineMode=2 is RGN_OR (union). Returns the result region type.</summary>
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern int CombineRgn(IntPtr hrgnDest, IntPtr hrgnSrc1, IntPtr hrgnSrc2, int fnCombineMode);

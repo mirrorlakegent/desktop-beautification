@@ -46,6 +46,22 @@ public sealed class AppSettings
     /// Shell Icons registry tweak (no admin needed). Applied on startup and toggleable from the tray.</summary>
     public bool HideShortcutArrows { get; set; }
 
+    // ---- M4-B: fence box appearance customization ----
+    /// <summary>Box corner radius in logical (96-DPI) pixels.</summary>
+    public int FenceCornerRadius { get; set; } = 10;
+    /// <summary>Box body background alpha (0-255). Lower = more wallpaper shows through.</summary>
+    public int FenceBodyOpacity { get; set; } = 180;
+    /// <summary>Box header background alpha (0-255).</summary>
+    public int FenceHeaderOpacity { get; set; } = 200;
+    /// <summary>Box title font size in logical pixels.</summary>
+    public float FenceTitleFontSize { get; set; } = 13;
+    /// <summary>Title horizontal alignment: 0 = Left (near), 1 = Center.</summary>
+    public int FenceTitleAlign { get; set; } = 0;
+    /// <summary>Whether to draw the category's emoji glyph before the title.</summary>
+    public bool FenceShowGlyph { get; set; } = true;
+    /// <summary>Frosted-glass (毛玻璃) mode: blur the wallpaper behind each box. Experimental; off by default.</summary>
+    public bool FenceFrosted { get; set; } = false;
+
     private static readonly string FilePath =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                      "DesktopSuite", "settings.json");

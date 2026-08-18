@@ -94,6 +94,10 @@ public sealed class FenceLayer
     private bool _diagFullWindow = false;
     private int _winW, _winH;
 
+    // ---- M4-B: user-tunable box appearance ----
+    private FenceAppearance _appearance = new();
+    private Bitmap? _frostBmp;          // cached frosted backdrop (screen capture, blurred) — reused per session
+
     // ---- M3 interaction state ----
     private FenceCategory? _dragCat;
     private int _dragOffsetX, _dragOffsetY;
@@ -171,6 +175,28 @@ public sealed class FenceLayer
         ApplyRegion();
         UpdateVisual();
         HostLog.Write($"FenceLayer.ApplyLayout：已套用导入布局，分类数={layout.Categories.Count}");
+    }
+
+    /// <summary>M4-B: apply user-tunable box appearance (corner radius, body/header opacity, title
+    /// font size, title alignment, glyph toggle, frosted). Repaints and re-regions so the click
+    /// hit-area matches the (rounded) visual. Safe to call any time after <see cref="Show"/>.</summary>
+    public void SetAppearance(FenceAppearance appearance)
+    {
+        if (appearance == null) return;
+        bool frostedWasOn = _appearance.Frosted;
+        _appearance = appearance.Clone();
+        // Turning frosted OFF (or changing the radius) invalidates the cached backdrop capture.
+        if (!_appearance.Frosted || _appearance.CornerRadius != appearance.CornerRadius)
+            InvalidateFrost();
+        ApplyRegion();
+        UpdateVisual();
+        HostLog.Write($"FenceLayer.SetAppearance：圆角={_appearance.CornerRadius} 体透明度={_appearance.BodyOpacity} 头透明度={_appearance.HeaderOpacity} 标题字号={_appearance.TitleFontSize:F0} 对齐={_appearance.TitleAlign} 字形={_appearance.ShowGlyph} 毛玻璃={_appearance.Frosted}（之前毛玻璃={frostedWasOn}）");
+    }
+
+    /// <summary>Drop the cached frosted backdrop so it is re-captured on the next paint.</summary>
+    private void InvalidateFrost()
+    {
+        if (_frostBmp != null) { _frostBmp.Dispose(); _frostBmp = null; }
     }
 
     /// <summary>
@@ -1407,6 +1433,7 @@ public sealed class FenceLayer
                 {
                     // Milestone 2: draw the real fence boxes (body + header + titles + items) and the
                     // "＋ 新建分类" tile from _boxRects.
+                    EnsureFrostCapture();
                     DrawBoxes(g);
                 }
             }
@@ -1468,23 +1495,24 @@ public sealed class FenceLayer
     /// transparent) — it is delivered by the SetWindowRgn hit region.</summary>
     private void DrawBoxes(Graphics g)
     {
-        int r = (int)Math.Round(10 * _dpiX);
+        int r = (int)Math.Round(_appearance.CornerRadius * _dpiX);
         int pad = (int)Math.Round(12 * _dpiX);
         int hh = (int)Math.Round(HeaderHeight * _dpiY);
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-        // Semi-transparent brushes — AlphaFormat=1 (per-pixel alpha) in UpdateVisual makes these
-        // composite against the desktop wallpaper behind the fence window.
-        using var bodyBrush = new SolidBrush(Color.FromArgb(180, 20, 22, 28));   // ~70% opaque dark
-        using var headerBrush = new SolidBrush(Color.FromArgb(200, 40, 44, 54));   // ~78% opaque header
+        // M4-B: body/header alpha + title font size are user-tunable. When Frosted is on, the body
+        // is the blurred desktop backdrop (drawn per-box, clipped) instead of the flat dark fill.
+        var titleAlign = _appearance.TitleAlign == 1 ? StringAlignment.Center : StringAlignment.Near;
+        using var bodyBrush = new SolidBrush(Color.FromArgb(_appearance.BodyOpacity, 20, 22, 28));
+        using var headerBrush = new SolidBrush(Color.FromArgb(_appearance.HeaderOpacity, 40, 44, 54));
         using var borderPen = new Pen(Color.FromArgb(160, 64, 70, 86), 1);         // ~63% opaque border
         using var titleBrush = new SolidBrush(Color.FromArgb(255, 255, 255, 255)); // fully opaque white
         using var itemBrush = new SolidBrush(Color.FromArgb(235, 210, 214, 222));  // mostly opaque text
-        using var titleFont = new Font("Segoe UI", (float)(13 * _dpiY), FontStyle.Bold);
+        using var titleFont = new Font("Segoe UI", (float)(_appearance.TitleFontSize * _dpiY), FontStyle.Bold);
         using var itemFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
         using var sf = new StringFormat(StringFormatFlags.NoWrap)
         {
-            Alignment = StringAlignment.Near,
+            Alignment = titleAlign,
             LineAlignment = StringAlignment.Center,
             Trimming = StringTrimming.EllipsisCharacter
         };
@@ -1496,9 +1524,26 @@ public sealed class FenceLayer
             int h = b.Bottom - b.Top;
             if (w <= 0 || h <= 0) continue;
 
-            // Body (all corners rounded) then header (top corners rounded only).
-            FillRoundedRect(g, bodyBrush, b.Left, b.Top, w, h, r);
+            // Body + header. When Frosted is on, the body is the blurred desktop backdrop
+            // (clipped to the rounded box) with a light dark tint for legibility; otherwise the
+            // flat semi-transparent dark fill.
             int headerH = Math.Min(hh, h);
+            if (_appearance.Frosted && _frostBmp != null)
+            {
+                using var boxPath = RoundedRectPath(b.Left, b.Top, w, h, r);
+                using (var clip = new Region(boxPath))
+                {
+                    g.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Replace);
+                    g.DrawImage(_frostBmp, 0, 0);
+                    g.ResetClip();
+                }
+                using var frostTint = new SolidBrush(Color.FromArgb(90, 16, 18, 24));
+                g.FillPath(frostTint, boxPath);
+            }
+            else
+            {
+                FillRoundedRect(g, bodyBrush, b.Left, b.Top, w, h, r);
+            }
             FillHeaderPath(g, headerBrush, b.Left, b.Top, w, headerH, r);
 
             // Title: render the optional emoji icon with the emoji font (Segoe UI Emoji), then the
@@ -1506,7 +1551,8 @@ public sealed class FenceLayer
             string label = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
             float titleX = b.Left + pad;
             float titleW = w - pad * 2 - CollapseBtnW; // leave room for the collapse chevron
-            if (!string.IsNullOrEmpty(b.IconRef))
+            if (titleAlign == StringAlignment.Center) { titleX = b.Left; titleW = w - CollapseBtnW; }
+            if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
             {
                 using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
                 string prefix = b.IconRef + " ";
@@ -1923,6 +1969,102 @@ public sealed class FenceLayer
         }
     }
 
+    /// <summary>M4-B frosted glass: capture the desktop region directly behind the fence window and
+    /// blur it, so a semi-transparent box reveals a frosted backdrop instead of flat dark. The capture
+    /// is cached for the whole Frosted session and reused across repaints (and during drag) — only
+    /// re-captured on DPI/display change or when Frosted is (re)enabled, so it cannot run away into a
+    /// feedback loop. Falls back silently (no backdrop) if the screen grab fails.</summary>
+    private void EnsureFrostCapture()
+    {
+        if (!_appearance.Frosted) { InvalidateFrost(); return; }
+        if (_frostBmp != null) return;       // reuse cached backdrop
+        if (_hwnd == IntPtr.Zero || _winW <= 0 || _winH <= 0) return;
+        try
+        {
+            NativeMethods.GetWindowRect(_hwnd, out var wr);
+            using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
+            using (var gc = Graphics.FromImage(raw))
+            {
+                // CopyFromScreen grabs the final composited screen (wallpaper + icons) at our window's
+                // screen position. This does NOT include our own (transparent) layered frame, so there
+                // is no self-capture feedback.
+                gc.CopyFromScreen(wr.Left, wr.Top, 0, 0, new Size(_winW, _winH));
+            }
+            int radius = (int)Math.Round(10 * _dpiX); // ~10 logical px blur kernel
+            _frostBmp = BoxBlur(raw, radius);
+            HostLog.Write($"FenceLayer.EnsureFrostCapture：毛玻璃背景已捕获并模糊 size={_winW}x{_winH} radius={radius}");
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("FenceLayer.EnsureFrostCapture 失败（回落普通半透明）", ex);
+            InvalidateFrost();
+        }
+    }
+
+    /// <summary>Separable box blur (two passes) approximating a Gaussian. Alpha is forced to 255 so the
+    /// captured backdrop is fully opaque (the per-box body alpha is applied later by the caller).</summary>
+    private static Bitmap BoxBlur(Bitmap src, int radius)
+    {
+        if (radius <= 0) return (Bitmap)src.Clone();
+        int w = src.Width, h = src.Height;
+        var rect = new Rectangle(0, 0, w, h);
+        var sData = src.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+        var dData = dst.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            unsafe
+            {
+                int stride = sData.Stride;
+                byte* src0 = (byte*)sData.Scan0;
+                byte* dst0 = (byte*)dData.Scan0;
+                for (int i = 0, n = stride * h; i < n; i++) dst0[i] = src0[i];
+
+                // Horizontal pass (per channel: B,G,R), then vertical pass.
+                byte[] lineB = new byte[Math.Max(w, h)];
+                byte[] lineG = new byte[Math.Max(w, h)];
+                byte[] lineR = new byte[Math.Max(w, h)];
+                for (int y = 0; y < h; y++)
+                {
+                    byte* p = dst0 + y * stride;
+                    for (int x = 0; x < w; x++) { lineB[x] = p[x * 4]; lineG[x] = p[x * 4 + 1]; lineR[x] = p[x * 4 + 2]; }
+                    BlurLine(lineB, w, radius); BlurLine(lineG, w, radius); BlurLine(lineR, w, radius);
+                    for (int x = 0; x < w; x++) { p[x * 4] = lineB[x]; p[x * 4 + 1] = lineG[x]; p[x * 4 + 2] = lineR[x]; p[x * 4 + 3] = 255; }
+                }
+                for (int x = 0; x < w; x++)
+                {
+                    byte* p = dst0 + x * 4;
+                    for (int y = 0; y < h; y++) { lineB[y] = p[y * stride]; lineG[y] = p[y * stride + 1]; lineR[y] = p[y * stride + 2]; }
+                    BlurLine(lineB, h, radius); BlurLine(lineG, h, radius); BlurLine(lineR, h, radius);
+                    for (int y = 0; y < h; y++) { p[y * stride] = lineB[y]; p[y * stride + 1] = lineG[y]; p[y * stride + 2] = lineR[y]; }
+                }
+            }
+        }
+        finally
+        {
+            src.UnlockBits(sData);
+            dst.UnlockBits(dData);
+        }
+        return dst;
+    }
+
+    /// <summary>In-place box blur of a single channel line using a prefix-sum sliding window (O(n)).</summary>
+    private static void BlurLine(byte[] a, int n, int radius)
+    {
+        if (radius <= 0 || n <= 1) return;
+        int[] pre = new int[n + 1];
+        for (int i = 0; i < n; i++) pre[i + 1] = pre[i] + a[i];
+        byte[] outp = new byte[n];
+        for (int i = 0; i < n; i++)
+        {
+            int l = Math.Max(0, i - radius);
+            int r = Math.Min(n - 1, i + radius);
+            int cnt = r - l + 1;
+            outp[i] = (byte)((pre[r + 1] - pre[l]) / cnt);
+        }
+        for (int i = 0; i < n; i++) a[i] = outp[i];
+    }
+
     /// <summary>Rounded-rect <see cref="GraphicsPath"/> (all four corners).</summary>
     private static GraphicsPath RoundedRectPath(int x, int y, int w, int h, int r)
     {
@@ -1993,6 +2135,7 @@ public sealed class FenceLayer
             _virtualTop = NativeMethods.GetSystemMetrics(NativeMethods.SM_YVIRTUALSCREEN);
 
             ClearIconCache(); // DPI changed → cached icon sizes are stale
+            InvalidateFrost(); // backdrop capture is DPI/size-specific — drop it
             BuildBoxes();
             ApplyRegion();
             UpdateVisual();
@@ -2022,6 +2165,7 @@ public sealed class FenceLayer
                 catch { /* class may already be gone; ignore */ }
                 _className = null;
             }
+            InvalidateFrost(); // release the cached frosted backdrop bitmap
         }
         catch (Exception ex)
         {
@@ -2142,9 +2286,10 @@ public sealed class FenceLayer
             if (_hwnd == IntPtr.Zero) return;
 
             IntPtr? combined = null;
+            int fr = (int)Math.Round(_appearance.CornerRadius * _dpiX);
             foreach (var b in _boxRects)
             {
-                IntPtr rgn = FenceNative.CreateRectRgn(b.Left, b.Top, b.Right, b.Bottom);
+                IntPtr rgn = FenceNative.CreateRoundRectRgn(b.Left, b.Top, b.Right, b.Bottom, fr, fr);
                 if (rgn == IntPtr.Zero) continue;
                 if (combined == null)
                     combined = rgn;
@@ -2159,7 +2304,8 @@ public sealed class FenceLayer
             if (_addTileRect.HasValue)
             {
                 var t = _addTileRect.Value;
-                IntPtr trgn = FenceNative.CreateRectRgn(t.Left, t.Top, t.Right, t.Bottom);
+                int ftr = (int)Math.Round(_appearance.CornerRadius * _dpiX);
+                IntPtr trgn = FenceNative.CreateRoundRectRgn(t.Left, t.Top, t.Right, t.Bottom, ftr, ftr);
                 if (trgn != IntPtr.Zero)
                 {
                     if (combined == null) combined = trgn;

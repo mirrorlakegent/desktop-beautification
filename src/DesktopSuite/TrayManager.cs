@@ -81,6 +81,9 @@ public sealed class TrayManager : IDisposable
         layoutMenu.DropDownItems.Add(new ToolStripMenuItem("📥 导入布局…", null, (_, _) => _owner.ImportLayout()));
         menu.Items.Add(layoutMenu);
 
+        // M4-B: fence box appearance customization.
+        menu.Items.Add(new ToolStripMenuItem("🎨 外观…", null, (_, _) => _owner.ShowAppearanceForm()));
+
         _arrowItem = new ToolStripMenuItem("🚫 隐藏快捷方式箭头：关");
         _arrowItem.Click += (_, _) => _owner.ToggleHideShortcutArrows();
         menu.Items.Add(_arrowItem);
