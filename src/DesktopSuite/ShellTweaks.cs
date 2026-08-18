@@ -12,9 +12,9 @@ namespace DesktopSuite;
 /// Per-user desktop shell tweaks that don't need administrator rights.
 ///
 /// P1 — Hide the shortcut-arrow overlay on desktop/explorer icons. Windows draws that little arrow
-/// as icon slot 29 in the shell's icon table; pointing value 29 at <c>shell32.dll,-50</c> (the system's
-/// built-in empty/transparent icon resource) makes the overlay invisible. We write it under
-/// <c>HKCU</c> (not HKLM), so it is a per-user override that takes effect with no UAC prompt.
+/// as icon slot 29 in the shell's icon table; pointing value 29 at a fully-transparent <c>.ico</c>
+/// makes the overlay invisible. We ship a 32×32 all-alpha-zero <c>hide_arrow.ico</c> next to the
+/// executable and write its absolute path under <c>HKCU</c> (no admin, no UAC).
 ///
 /// <para><b>Critical (verified on Windows 11 build 26200):</b> the Shell Icons value is only read when
 /// Explorer starts. SHChangeNotify / WM_SETTINGCHANGE / icon-cache deletion do NOT make it take effect
@@ -29,17 +29,16 @@ public static class ShellTweaks
     private const string ArrowValueName = "29";
 
     /// <summary>
-    /// Full path to the system's built-in transparent icon resource. Written as REG_SZ (not
-    /// ExpandString) for maximum compatibility — every classic "hide arrow" tool uses this exact format.
+    /// Absolute path to the bundled fully-transparent .ico. Computed at runtime from the app's base
+    /// directory so it survives install-location changes.
     /// </summary>
-    private static readonly string TransparentArrowValue =
-        Path.Combine(Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows",
-            @"System32\shell32.dll,-50");
+    private static string TransparentArrowValue =>
+        Path.Combine(AppContext.BaseDirectory, "hide_arrow.ico");
 
     // ---- Re-entrancy guard: prevent double-restart if user clicks rapidly ----
     private static int _isRestarting = 0;
 
-    /// <summary>True when value 29 already points at the transparent system icon (tweak is active).</summary>
+    /// <summary>True when value 29 already points at our transparent .ico (tweak is active).</summary>
     public static bool IsHideShortcutArrowsEnabled()
     {
         try
@@ -57,8 +56,9 @@ public static class ShellTweaks
     }
 
     /// <summary>
-    /// Write (or remove) the Shell Icons value 29. Does NOT restart Explorer — the caller decides
-    /// whether a restart is needed based on the returned <c>changed</c> flag.
+    /// Write (or remove) the Shell Icons value 29. When enabling, writes the bundled transparent
+    /// .ico path (REG_SZ); when disabling, deletes the value. Does NOT restart Explorer — the caller
+    /// decides whether a restart is needed based on the returned <c>changed</c> flag.
     /// </summary>
     /// <returns>True if the registry was actually changed.</returns>
     public static bool WriteArrowRegistry(bool enable)
@@ -72,9 +72,16 @@ public static class ShellTweaks
 
             if (enable)
             {
-                if (!string.Equals(current, TransparentArrowValue, StringComparison.OrdinalIgnoreCase))
+                var target = TransparentArrowValue;
+                // Only set if the .ico actually exists; otherwise the tweak would point at nothing.
+                if (!File.Exists(target))
                 {
-                    key.SetValue(ArrowValueName, TransparentArrowValue, RegistryValueKind.String);
+                    HostLog.Write("去箭头透明图标文件缺失，跳过写入", null);
+                    return false;
+                }
+                if (!string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    key.SetValue(ArrowValueName, target, RegistryValueKind.String);
                     changed = true;
                 }
                 else { changed = false; }
