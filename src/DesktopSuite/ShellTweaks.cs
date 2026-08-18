@@ -16,26 +16,28 @@ namespace DesktopSuite;
 /// built-in empty/transparent icon resource) makes the overlay invisible. We write it under
 /// <c>HKCU</c> (not HKLM), so it is a per-user override that takes effect with no UAC prompt.
 ///
-/// <para><b>Important:</b> on Windows 10/11 the Shell Icons value is only read when Explorer starts.
-/// SHChangeNotify / WM_SETTINGCHANGE / cache deletion alone do NOT make it take effect at runtime
-/// (verified on Windows 11 build 26200). The reliable path is therefore to <b>restart Explorer</b>
-/// via <see cref="RestartExplorer"/>. Callers that depend on the desktop shell (wallpaper WorkerW,
-/// hidden icons) must re-apply their state after the restart — <see cref="RestartExplorer"/> blocks
-/// until Progman is back so they can do so safely. The lightweight <c>InvalidateIconCache</c> path is
-/// kept as a best-effort fallback for older Windows builds where it still helps.
+/// <para><b>Critical (verified on Windows 11 build 26200):</b> the Shell Icons value is only read when
+/// Explorer starts. SHChangeNotify / WM_SETTINGCHANGE / icon-cache deletion do NOT make it take effect
+/// at runtime. The ONLY reliable path is to restart Explorer via <see cref="RestartExplorer"/>.
+/// Callers that depend on the desktop shell (wallpaper WorkerW, hidden icons) must re-apply their
+/// state after the restart.</para>
 /// </summary>
 public static class ShellTweaks
 {
-    // Explorer reads both HKLM and HKCU; the current-user key wins for this user and needs no admin.
     private const string ShellIconsKey =
         @"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons";
     private const string ArrowValueName = "29";
 
     /// <summary>
-    /// The system built-in empty-icon resource used by virtually every "hide arrow" tool.
-    /// Resource -50 in shell32.dll is a 16×16 / 32×32 transparent placeholder — no custom .ico needed.
+    /// Full path to the system's built-in transparent icon resource. Written as REG_SZ (not
+    /// ExpandString) for maximum compatibility — every classic "hide arrow" tool uses this exact format.
     /// </summary>
-    private const string TransparentArrowValue = @"%SystemRoot%\System32\shell32.dll,-50";
+    private static readonly string TransparentArrowValue =
+        Path.Combine(Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows",
+            @"System32\shell32.dll,-50");
+
+    // ---- Re-entrancy guard: prevent double-restart if user clicks rapidly ----
+    private static int _isRestarting = 0;
 
     /// <summary>True when value 29 already points at the transparent system icon (tweak is active).</summary>
     public static bool IsHideShortcutArrowsEnabled()
@@ -55,13 +57,11 @@ public static class ShellTweaks
     }
 
     /// <summary>
-    /// Apply or remove the shortcut-arrow tweak.
+    /// Write (or remove) the Shell Icons value 29. Does NOT restart Explorer — the caller decides
+    /// whether a restart is needed based on the returned <c>changed</c> flag.
     /// </summary>
-    /// <param name="enable">When true, point value 29 at the transparent system icon; when false, delete it.</param>
-    /// <param name="forceRestartExplorer">When true and registry changed, restart Explorer unconditionally.
-    /// Pass false on startup to use lightweight cache invalidation instead.</param>
     /// <returns>True if the registry was actually changed.</returns>
-    public static bool ApplyHideShortcutArrows(bool enable, bool forceRestartExplorer)
+    public static bool WriteArrowRegistry(bool enable)
     {
         try
         {
@@ -74,7 +74,7 @@ public static class ShellTweaks
             {
                 if (!string.Equals(current, TransparentArrowValue, StringComparison.OrdinalIgnoreCase))
                 {
-                    key.SetValue(ArrowValueName, TransparentArrowValue, RegistryValueKind.ExpandString);
+                    key.SetValue(ArrowValueName, TransparentArrowValue, RegistryValueKind.String);
                     changed = true;
                 }
                 else { changed = false; }
@@ -89,14 +89,6 @@ public static class ShellTweaks
                 else { changed = false; }
             }
 
-            if (changed)
-            {
-                if (forceRestartExplorer)
-                    RestartExplorer();
-                else
-                    InvalidateIconCache();
-            }
-
             return changed;
         }
         catch (Exception ex)
@@ -107,103 +99,18 @@ public static class ShellTweaks
     }
 
     /// <summary>
-    /// Force Windows to rebuild its icon cache so the Shell Icons change takes effect immediately,
-    /// without restarting Explorer (and thus without tearing down the wallpaper WorkerW).
-    ///
-    /// Strategy (ordered by reliability):
-    /// <list type="number">
-    ///   <item>Delete IconCache.db + iconcache_*.db from the user profile.</item>
-    ///   <item>Broadcast WM_SETTINGCHANGE("Shell Icons") to all top-level windows.</item>
-    ///   <item>Call SHChangeNotify(SHCNE_ASSOCCHANGED) as a safety net.</item>
-    /// </list>
-    /// </summary>
-    private static void InvalidateIconCache()
-    {
-        try
-        {
-            // Step 1: Nuke the on-disk icon cache so Explorer can't serve stale images.
-            try
-            {
-                var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-
-                // Main legacy cache
-                var mainDb = Path.Combine(localAppData, "IconCache.db");
-                DeleteQuietly(mainDb);
-
-                // Win10/11 per-size caches
-                var explorerCache = Path.Combine(localAppData, "Microsoft", "Windows", "Explorer");
-                if (Directory.Exists(explorerCache))
-                {
-                    foreach (var f in Directory.GetFiles(explorerCache, "iconcache_*"))
-                        DeleteQuietly(f);
-                    // Also clean thumbcache variants that sometimes hold overlay copies
-                    foreach (var f in Directory.GetFiles(explorerCache, "thumbcache_*.db"))
-                        DeleteQuietly(f);
-                }
-            }
-            catch (Exception ex)
-            {
-                HostLog.Write("删除图标缓存文件时部分失败（可忽略）", ex);
-            }
-
-            // Step 2: Broadcast WM_SETTINGCHANGE — this is what forces Explorer to re-read Shell Icons.
-            const int HWND_BROADCAST = 0xffff;
-            const uint WM_SETTINGCHANGE = 0x001A;
-            var settingNamePtr = Marshal.StringToHGlobalUni("Shell Icons");
-            try
-            {
-                SendMessageTimeout(
-                    new IntPtr(HWND_BROADCAST), WM_SETTINGCHANGE, IntPtr.Zero, settingNamePtr,
-                    SMTO_ABORTIFHUNG, 2000, out _);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(settingNamePtr);
-            }
-
-            // Step 3: SHChangeNotify as belt-and-suspenders.
-            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
-        }
-        catch (Exception ex)
-        {
-            HostLog.Write("图标缓存刷新失败（可忽略，用户仍可手动重启资源管理器）", ex);
-        }
-    }
-
-    private static void DeleteQuietly(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-        catch { /* best-effort */ }
-    }
-
-    // ---- P/Invoke declarations ----
-
-    private const int SHCNE_ASSOCCHANGED = 0x08000000;
-    private const uint SHCNF_IDLIST = 0x0000;
-    private const uint SMTO_ABORTIFHUNG = 0x0002;
-
-    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    private static extern IntPtr SendMessageTimeout(
-        IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam,
-        uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
-
-    [DllImport("shell32.dll")]
-    private static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-
-    /// <summary>
-    /// Kill and relaunch the Explorer shell so the Shell Icons change (and any other registry-based
-    /// shell tweak) takes effect. Explorer is the only reliable way to make value 29 apply on
-    /// Windows 10/11 — SHChangeNotify alone does nothing for it.
-    ///
-    /// The method blocks until the desktop shell (Progman) is back, so callers can immediately
-    /// re-apply dependent state (wallpaper WorkerW, hidden icons) without racing a half-started shell.
+    /// Kill and relaunch the Explorer shell. Blocks until Progman window reappears (up to 6 s).
+    /// Thread-safe: if already restarting, returns immediately (no-op) to prevent cascading restarts.
     /// </summary>
     public static void RestartExplorer()
     {
+        // Guard: don't allow nested or concurrent restarts.
+        if (Interlocked.CompareExchange(ref _isRestarting, 1, 0) != 0)
+        {
+            HostLog.Write("Explorer 重已在进行中，跳过重复重启");
+            return;
+        }
+
         try
         {
             using var kill = new Process
@@ -229,18 +136,20 @@ public static class ShellTweaks
         catch (Exception ex)
         {
             HostLog.Write("重启 explorer 失败", ex);
+            Interlocked.Exchange(ref _isRestarting, 0);
             return;
         }
 
-        // Wait for the shell to come back so dependent re-apply (wallpaper, icons) finds a valid Progman.
+        // Wait for the shell to come back so dependent re-apply finds a valid Progman.
         for (int i = 0; i < 30; i++)
         {
             IntPtr progman = IntPtr.Zero;
             try { progman = FindWindow("Progman", null); } catch { }
-            if (progman != IntPtr.Zero) return;
+            if (progman != IntPtr.Zero) break;
             Thread.Sleep(200);
         }
-        HostLog.Write("重启 explorer 后未检测到 Progman 窗口（超时，仍继续）");
+
+        Interlocked.Exchange(ref _isRestarting, 0);
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]

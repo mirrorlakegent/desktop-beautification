@@ -112,18 +112,14 @@ public partial class MainWindow : Window
             ApplyFencesWithRetryIfEnabled();
 
         // P1: re-apply the "hide shortcut arrows" desktop tweak if it was enabled last session.
-        // On Windows 10/11 the Shell Icons value is only read at Explorer startup, so if the registry
-        // is out of sync we MUST restart Explorer (forceRestartExplorer: true) for the arrows to hide.
-        // When the value already matches, nothing changes and no restart happens — a normal relaunch
-        // is silent because the previous run's Explorer restart already applied it.
+        // On Windows 11 the Shell Icons value is only read at Explorer startup. If the registry is
+        // out of sync, write it and restart Explorer so arrows actually hide. If already in sync,
+        // no restart needed (the previous run's Explorer restart applied it).
         try
         {
-            bool changed = ShellTweaks.ApplyHideShortcutArrows(_settings.HideShortcutArrows, forceRestartExplorer: false);
+            bool changed = ShellTweaks.WriteArrowRegistry(_settings.HideShortcutArrows);
             if (changed && _settings.HideShortcutArrows)
-            {
-                // Registry was out of sync and we just wrote it — restart Explorer so it actually hides.
                 RestartExplorerAndRecover();
-            }
         }
         catch (Exception ex) { HostLog.Write("应用去箭头设置失败", ex); }
 
@@ -707,9 +703,9 @@ public partial class MainWindow : Window
     /// <summary>Whether the shortcut-arrow tweak is currently active (registry in sync with intent).</summary>
     public bool ShortcutArrowsHidden => ShellTweaks.IsHideShortcutArrowsEnabled();
 
-    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Applies the per-user registry
-    /// tweak and restarts Explorer so the change is visible immediately (the only reliable path on
-    /// Windows 10/11). Wallpaper + hidden-icon state are re-applied after the restart.</summary>
+    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Writes the registry value
+    /// and restarts Explorer (the only reliable path on Windows 11 build 26200). Wallpaper +
+    /// hidden-icon state are re-applied after the restart.</summary>
     public void ToggleHideShortcutArrows()
     {
         bool enable = !_settings.HideShortcutArrows;
@@ -717,12 +713,12 @@ public partial class MainWindow : Window
         _settings.Save();
         try
         {
-            // Write the registry value, then restart Explorer (lightweight refresh is ineffective on Win11).
-            ShellTweaks.ApplyHideShortcutArrows(enable, forceRestartExplorer: false);
-            RestartExplorerAndRecover();
+            bool changed = ShellTweaks.WriteArrowRegistry(enable);
+            if (changed)
+                RestartExplorerAndRecover();
             Status.Text = enable
-                ? "已隐藏快捷方式箭头（已重启资源管理器）"
-                : "已恢复快捷方式箭头（已重启资源管理器）";
+                ? changed ? "已隐藏快捷方式箭头（正在重启资源管理器…）" : "快捷方式箭头已处于隐藏状态"
+                : changed ? "已恢复快捷方式箭头（正在重启资源管理器…）" : "快捷方式箭头已处于显示状态";
         }
         catch (Exception ex)
         {
