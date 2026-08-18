@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -934,6 +935,86 @@ public partial class MainWindow : Window
         layout.FencesEnabled = false;
         _fenceStore.Save(layout);
         if (BtnToggleFences != null) BtnToggleFences.Content = "启用桌面整理";
+    }
+
+    // ---- M4-A: fence layout import / export ----
+
+    /// <summary>Export the current fence layout to a <c>.dslayout</c> file (JSON). Falls back to the
+    /// persisted store when fences are not currently active.</summary>
+    public void ExportLayout()
+    {
+        try
+        {
+            var layout = _fenceLayer?.CurrentLayout ?? _fenceStore.Load();
+            if (layout == null) return;
+
+            var dlg = new System.Windows.Forms.SaveFileDialog
+            {
+                Title = "导出围栏布局",
+                Filter = "桌面布局文件 (*.dslayout)|*.dslayout|所有文件 (*.*)|*.*",
+                DefaultExt = "dslayout",
+                FileName = $"DesktopSuite布局_{DateTime.Now:yyyyMMddHHmmss}.dslayout"
+            };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
+            var json = JsonSerializer.Serialize(layout, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(dlg.FileName, json);
+            MessageBox.Show($"布局已导出到：\n{dlg.FileName}\n\n共 {layout.Categories.Count} 个分类。",
+                "导出成功", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("导出布局失败", ex);
+            MessageBox.Show($"导出布局失败：{ex.Message}", "导出失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Import a <c>.dslayout</c> file, replacing the current layout. Member paths that do not
+    /// exist on this machine are kept (they may belong to files not yet copied over) but reported.</summary>
+    public void ImportLayout()
+    {
+        try
+        {
+            var dlg = new System.Windows.Forms.OpenFileDialog
+            {
+                Title = "导入围栏布局",
+                Filter = "桌面布局文件 (*.dslayout)|*.dslayout|所有文件 (*.*)|*.*",
+                CheckFileExists = true
+            };
+            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
+            var json = File.ReadAllText(dlg.FileName);
+            var imported = JsonSerializer.Deserialize<FenceLayout>(json);
+            if (imported == null)
+            {
+                MessageBox.Show("文件格式无效，无法解析。", "导入失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            _fenceStore.EnsureBuiltInCategories(imported);
+
+            // Path existence check (informational — missing paths are kept, not dropped).
+            int missing = 0;
+            foreach (var cat in imported.Categories)
+                foreach (var p in cat.MemberPaths)
+                    if (!File.Exists(p) && !Directory.Exists(p)) missing++;
+
+            // Persist first so a reload (or next EnableFences) sees it.
+            _fenceStore.Save(imported);
+
+            // Apply live if fences are active.
+            _fenceLayer?.ApplyLayout(imported);
+
+            string msg = $"布局已导入：{imported.Categories.Count} 个分类。";
+            if (missing > 0)
+                msg += $"\n\n其中 {missing} 个成员路径在本地不存在（可能来自其他机器，已保留；复制对应文件后即可显示）。";
+            MessageBox.Show(msg, "导入成功", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("导入布局失败", ex);
+            MessageBox.Show($"导入布局失败：{ex.Message}", "导入失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     /// <summary>Re-enable fences on startup (off the UI thread, with backoff) when the last session

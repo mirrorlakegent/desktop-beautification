@@ -158,6 +158,21 @@ public sealed class FenceLayer
         // opaque-white under the Explorer icon layer and never reliably received the drop.
     }
 
+    /// <summary>Currently displayed layout (in-memory source of truth). Null before <see cref="Show"/>.</summary>
+    public FenceLayout? CurrentLayout => _layout;
+
+    /// <summary>Replace the live layout wholesale (used by layout import, M4-A). Rebuilds boxes, the
+    /// hit-region and repaints. The desktop window itself is reused (create-once invariant preserved).</summary>
+    public void ApplyLayout(FenceLayout layout)
+    {
+        if (layout == null) return;
+        _layout = layout;
+        BuildBoxes();
+        ApplyRegion();
+        UpdateVisual();
+        HostLog.Write($"FenceLayer.ApplyLayout：已套用导入布局，分类数={layout.Categories.Count}");
+    }
+
     /// <summary>
     /// Create the desktop child window (plain Win32, layered + UpdateLayeredWindow rendered) and mount
     /// it under the desktop shell. The window is created AS a child of the desktop host — never

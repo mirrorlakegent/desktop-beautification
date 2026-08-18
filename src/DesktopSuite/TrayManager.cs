@@ -75,6 +75,12 @@ public sealed class TrayManager : IDisposable
         _iconItem.Click += (_, _) => _owner.ToggleHideIcons();
         menu.Items.Add(_iconItem);
 
+        // M4-A: fence layout import / export (backup & migration).
+        var layoutMenu = new ToolStripMenuItem("📁 布局");
+        layoutMenu.DropDownItems.Add(new ToolStripMenuItem("📤 导出布局…", null, (_, _) => _owner.ExportLayout()));
+        layoutMenu.DropDownItems.Add(new ToolStripMenuItem("📥 导入布局…", null, (_, _) => _owner.ImportLayout()));
+        menu.Items.Add(layoutMenu);
+
         _arrowItem = new ToolStripMenuItem("🚫 隐藏快捷方式箭头：关");
         _arrowItem.Click += (_, _) => _owner.ToggleHideShortcutArrows();
         menu.Items.Add(_arrowItem);
