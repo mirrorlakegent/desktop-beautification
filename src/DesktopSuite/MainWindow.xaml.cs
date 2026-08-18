@@ -111,17 +111,12 @@ public partial class MainWindow : Window
         if (_fenceStore.Load().FencesEnabled)
             ApplyFencesWithRetryIfEnabled();
 
-        // P1: re-apply the "hide shortcut arrows" desktop tweak if it was enabled last session.
-        // On Windows 11 the Shell Icons value is only read at Explorer startup. If the registry is
-        // out of sync, write it and restart Explorer so arrows actually hide. If already in sync,
-        // no restart needed (the previous run's Explorer restart applied it).
-        try
-        {
-            bool changed = ShellTweaks.WriteArrowRegistry(_settings.HideShortcutArrows);
-            if (changed && _settings.HideShortcutArrows)
-                RestartExplorerAndRecover();
-        }
-        catch (Exception ex) { HostLog.Write("应用去箭头设置失败", ex); }
+        // P1: clean up the legacy Shell Icons value 29 from earlier (build-26200-broken) builds. The
+        // new approach toggles the HKLM IsShortcut marker and needs admin, so we deliberately do NOT
+        // auto-apply at launch — that would force a UAC prompt on every startup. The tray toggle
+        // performs the admin-elevated apply on demand instead.
+        try { ShellTweaks.CleanupLegacyShellIcons(); }
+        catch (Exception ex) { HostLog.Write("清理旧版去箭头注册表失败", ex); }
 
         // The tray icon is the always-available control surface; it persists after the window is
         // closed (we minimise-to-tray, so the GUI process stays alive to own the icon).
@@ -703,9 +698,9 @@ public partial class MainWindow : Window
     /// <summary>Whether the shortcut-arrow tweak is currently active (registry in sync with intent).</summary>
     public bool ShortcutArrowsHidden => ShellTweaks.IsHideShortcutArrowsEnabled();
 
-    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Writes the registry value
-    /// and restarts Explorer (the only reliable path on Windows 11 build 26200). Wallpaper +
-    /// hidden-icon state are re-applied after the restart.</summary>
+    /// <summary>Toggle the shortcut-arrow overlay from the tray menu. Elevates (UAC) to write the
+    /// HKLM IsShortcut marker if we aren't already admin, then restarts Explorer so the change takes
+    /// effect. Wallpaper + hidden-icon state are re-applied after the restart.</summary>
     public void ToggleHideShortcutArrows()
     {
         bool enable = !_settings.HideShortcutArrows;
@@ -713,12 +708,24 @@ public partial class MainWindow : Window
         _settings.Save();
         try
         {
-            bool changed = ShellTweaks.WriteArrowRegistry(enable);
-            if (changed)
+            bool applied = ApplyIsShortcutElevated(enable);
+            if (applied)
+            {
                 RestartExplorerAndRecover();
-            Status.Text = enable
-                ? changed ? "已隐藏快捷方式箭头（正在重启资源管理器…）" : "快捷方式箭头已处于隐藏状态"
-                : changed ? "已恢复快捷方式箭头（正在重启资源管理器…）" : "快捷方式箭头已处于显示状态";
+                Status.Text = enable
+                    ? "已隐藏快捷方式箭头（已重启资源管理器）"
+                    : "已恢复快捷方式箭头（已重启资源管理器）";
+            }
+            else
+            {
+                // The elevated write didn't happen (UAC cancelled or access denied) — roll the saved
+                // intent back so the tray checkbox keeps reflecting reality.
+                _settings.HideShortcutArrows = !enable;
+                _settings.Save();
+                Status.Text = enable
+                    ? "隐藏箭头失败：需要管理员权限（已取消 UAC 或权限不足）"
+                    : "恢复箭头失败：需要管理员权限";
+            }
         }
         catch (Exception ex)
         {
@@ -726,6 +733,33 @@ public partial class MainWindow : Window
             Status.Text = $"去箭头切换失败：{ex.Message}";
         }
         _tray?.RefreshArrowLabel();
+    }
+
+    /// <summary>
+    /// Apply the IsShortcut registry tweak with the minimum privilege needed. If this process already
+    /// holds admin, write inline; otherwise launch an elevated copy of ourselves (runas → UAC prompt)
+    /// and wait for it to finish. Returns true only if the elevated write succeeded (exit code 0).
+    /// </summary>
+    private bool ApplyIsShortcutElevated(bool enable)
+    {
+        if (ShellTweaks.IsRunningAsAdmin())
+            return ShellTweaks.ApplyIsShortcut(enable);
+
+        string? exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrEmpty(exe))
+            exe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = exe,
+            Arguments = $"--apply-ishortcut {(enable ? "on" : "off")}",
+            Verb = "runas",
+            UseShellExecute = true,
+            CreateNoWindow = true,
+        };
+        using var p = System.Diagnostics.Process.Start(psi);
+        if (p == null) return false;
+        p.WaitForExit();
+        return p.ExitCode == 0;
     }
 
     // ---- Desktop organization (P1): shell refresh ----

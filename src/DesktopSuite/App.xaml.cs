@@ -31,6 +31,19 @@ public partial class App : Application
             return;
         }
 
+        // Elevated helper for the shortcut-arrow tweak: delete/restore the HKLM IsShortcut marker and
+        // exit immediately. Runs BEFORE the single-instance mutex so it never collides with the live GUI
+        // instance (which owns that mutex) — it must perform its registry write and terminate, with no
+        // UI and no mutex handshake.
+        int isIdx = Array.IndexOf(e.Args, "--apply-ishortcut");
+        if (isIdx >= 0 && isIdx + 1 < e.Args.Length)
+        {
+            bool enable = e.Args[isIdx + 1].Equals("on", StringComparison.OrdinalIgnoreCase);
+            int code = ShellTweaks.ApplyIsShortcut(enable) ? 0 : 1;
+            Environment.Exit(code);
+            return;
+        }
+
         // P1.5: single-instance guard (GUI only — the renderer host above is exempt).
         // Use initiallyOwned=false so we never re-enter a mutex the current thread already holds; we
         // acquire it explicitly below. This also lets us RECOVER from an ABANDONED mutex left by a

@@ -20,11 +20,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>tray_icon.ico</Link>
     </Content>
-    <!-- P1: fully-transparent .ico used to hide the shortcut-arrow overlay via Shell Icons value 29 -->
-    <Content Include="..\..\assets\brand\hide_arrow.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>hide_arrow.ico</Link>
-    </Content>
   </ItemGroup>
 
   <!--

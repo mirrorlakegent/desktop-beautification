@@ -1,112 +1,138 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Threading;
-using Microsoft.Win32;
 using DesktopSuite.Wallpaper;
+using Microsoft.Win32;
 
 namespace DesktopSuite;
 
 /// <summary>
-/// Per-user desktop shell tweaks that don't need administrator rights.
+/// Per-user desktop shell tweaks.
 ///
-/// P1 — Hide the shortcut-arrow overlay on desktop/explorer icons. Windows draws that little arrow
-/// as icon slot 29 in the shell's icon table; pointing value 29 at a fully-transparent <c>.ico</c>
-/// makes the overlay invisible. We ship a 32×32 all-alpha-zero <c>hide_arrow.ico</c> next to the
-/// executable and write its absolute path under <c>HKCU</c> (no admin, no UAC).
+/// P1 — Hide the shortcut-arrow overlay on desktop/explorer icons.
 ///
-/// <para><b>Critical (verified on Windows 11 build 26200):</b> the Shell Icons value is only read when
-/// Explorer starts. SHChangeNotify / WM_SETTINGCHANGE / icon-cache deletion do NOT make it take effect
-/// at runtime. The ONLY reliable path is to restart Explorer via <see cref="RestartExplorer"/>.
-/// Callers that depend on the desktop shell (wallpaper WorkerW, hidden icons) must re-apply their
-/// state after the restart.</para>
+/// Mechanism (verified on Windows 11 build 26200): we delete the <c>IsShortcut</c> registry value
+/// under the relevant HKCR progids (<c>lnkfile</c>, <c>piffile</c>, <c>InternetShortcut</c>). Windows
+/// keys off the *presence* of that value to decide whether to paint the little arrow overlay; removing
+/// it tells the shell "this is not a shortcut", so the arrow is never drawn. This is a completely
+/// different — and on build 26200, the only working — path versus the classic <c>Shell Icons</c> value
+/// 29, which that build ignores entirely (we tested shell32.dll,-50, a transparent .ico, and a manual
+/// Explorer restart; the arrow never disappeared via value 29).
+///
+/// <para><b>Admin requirement:</b> the progid keys live under <c>HKLM</c>, so writing needs
+/// administrator rights; reading (to reflect tray state) does not. The GUI therefore launches a
+/// short-lived elevated copy of itself (via <c>runas</c>) to perform the write — see <see cref="App"/>'s
+/// <c>--apply-ishortcut</c> branch.</para>
+///
+/// <para><b>Explorer restart:</b> the overlay change only takes effect when Explorer restarts. Callers
+/// must restart Explorer and re-apply shell-dependent state (wallpaper WorkerW, hidden icons)
+/// afterwards — <see cref="RestartExplorer"/> plus the caller's own recovery step.</para>
 /// </summary>
 public static class ShellTweaks
 {
-    private const string ShellIconsKey =
+    // Progids whose IsShortcut marker we toggle. These cover the common shortcut types seen on the
+    // desktop (.lnk files, .pif, and .url internet shortcuts).
+    private static readonly string[] IsShortcutProgIds =
+    {
+        @"Software\Classes\lnkfile",
+        @"Software\Classes\piffile",
+        @"Software\Classes\InternetShortcut",
+    };
+
+    // Legacy Shell Icons value 29 from the earlier (build-26200-broken) approach — removed on launch.
+    private const string LegacyShellIconsKey =
         @"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons";
-    private const string ArrowValueName = "29";
+    private const string LegacyArrowValueName = "29";
 
-    /// <summary>
-    /// Absolute path to the bundled fully-transparent .ico. Computed at runtime from the app's base
-    /// directory so it survives install-location changes.
-    /// </summary>
-    private static string TransparentArrowValue =>
-        Path.Combine(AppContext.BaseDirectory, "hide_arrow.ico");
-
-    // ---- Re-entrancy guard: prevent double-restart if user clicks rapidly ----
+    // Re-entrancy guard: prevent double Explorer restart if the user clicks rapidly.
     private static int _isRestarting = 0;
 
-    /// <summary>True when value 29 already points at our transparent .ico (tweak is active).</summary>
+    /// <summary>True when the current process holds administrator rights.</summary>
+    public static bool IsRunningAsAdmin()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// True when the arrow is currently hidden, i.e. the <c>IsShortcut</c> marker is ABSENT under
+    /// <c>HKLM\Software\Classes\lnkfile</c>. Reading HKLM does not require admin.
+    /// </summary>
     public static bool IsHideShortcutArrowsEnabled()
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(ShellIconsKey);
-            var v = key?.GetValue(ArrowValueName);
-            if (v == null) return false;
-            return string.Equals(v.ToString(), TransparentArrowValue, StringComparison.OrdinalIgnoreCase);
+            using var key = Registry.LocalMachine.OpenSubKey(@"Software\Classes\lnkfile");
+            // Enabled == the IsShortcut value does NOT exist.
+            return key?.GetValue("IsShortcut") == null;
         }
         catch (Exception ex)
         {
-            HostLog.Write("读取去箭头注册表失败", ex);
+            HostLog.Write("读取去箭头状态失败", ex);
             return false;
         }
     }
 
     /// <summary>
-    /// Write (or remove) the Shell Icons value 29. When enabling, writes the bundled transparent
-    /// .ico path (REG_SZ); when disabling, deletes the value. Does NOT restart Explorer — the caller
-    /// decides whether a restart is needed based on the returned <c>changed</c> flag.
+    /// Delete (enable=true) or recreate (enable=false) the <c>IsShortcut</c> marker under HKLM for
+    /// every tracked progid. <b>Requires administrator rights</b> — invoke from an elevated helper.
+    /// Returns true on success.
     /// </summary>
-    /// <returns>True if the registry was actually changed.</returns>
-    public static bool WriteArrowRegistry(bool enable)
+    public static bool ApplyIsShortcut(bool enable)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(ShellIconsKey, writable: true)
-                            ?? Registry.CurrentUser.CreateSubKey(ShellIconsKey);
-            var current = key.GetValue(ArrowValueName) as string;
-            bool changed;
-
-            if (enable)
+            foreach (var progId in IsShortcutProgIds)
             {
-                var target = TransparentArrowValue;
-                // Only set if the .ico actually exists; otherwise the tweak would point at nothing.
-                if (!File.Exists(target))
+                using var key = Registry.LocalMachine.OpenSubKey(progId, writable: true);
+                if (key == null)
                 {
-                    HostLog.Write("去箭头透明图标文件缺失，跳过写入", null);
-                    return false;
+                    HostLog.Write($"去箭头：注册表项不存在，跳过 {progId}");
+                    continue;
                 }
-                if (!string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
-                {
-                    key.SetValue(ArrowValueName, target, RegistryValueKind.String);
-                    changed = true;
-                }
-                else { changed = false; }
+                bool present = key.GetValue("IsShortcut") != null;
+                if (enable && present)
+                    key.DeleteValue("IsShortcut", throwOnMissingValue: false);
+                else if (!enable && !present)
+                    key.SetValue("IsShortcut", "", RegistryValueKind.String);
             }
-            else
-            {
-                if (current != null)
-                {
-                    key.DeleteValue(ArrowValueName, throwOnMissingValue: false);
-                    changed = true;
-                }
-                else { changed = false; }
-            }
-
-            return changed;
+            HostLog.Write($"去箭头：IsShortcut 操作完成（enable={enable}）");
+            return true;
         }
         catch (Exception ex)
         {
-            HostLog.Write("去箭头注册表操作失败", ex);
+            HostLog.Write("去箭头：IsShortcut 注册表操作失败（需管理员）", ex);
             return false;
         }
     }
 
+    /// <summary>Remove the legacy Shell Icons value 29 written by earlier builds (HKCU — no admin).</summary>
+    public static void CleanupLegacyShellIcons()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(LegacyShellIconsKey, writable: true);
+            if (key == null) return;
+            if (key.GetValue(LegacyArrowValueName) != null)
+            {
+                key.DeleteValue(LegacyArrowValueName, throwOnMissingValue: false);
+                HostLog.Write("去箭头：已清理旧版 Shell Icons 值 29");
+            }
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("去箭头：清理旧版 Shell Icons 失败（可忽略）", ex);
+        }
+    }
+
     /// <summary>
-    /// Kill and relaunch the Explorer shell. Blocks until Progman window reappears (up to 6 s).
+    /// Kill and relaunch the Explorer shell. Blocks until the Progman window reappears (up to 6 s).
     /// Thread-safe: if already restarting, returns immediately (no-op) to prevent cascading restarts.
     /// </summary>
     public static void RestartExplorer()
@@ -114,7 +140,7 @@ public static class ShellTweaks
         // Guard: don't allow nested or concurrent restarts.
         if (Interlocked.CompareExchange(ref _isRestarting, 1, 0) != 0)
         {
-            HostLog.Write("Explorer 重已在进行中，跳过重复重启");
+            HostLog.Write("Explorer 重启已在进行中，跳过重复重启");
             return;
         }
 
