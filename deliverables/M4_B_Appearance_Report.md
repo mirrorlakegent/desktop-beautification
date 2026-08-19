@@ -1,6 +1,6 @@
 # M4-B 外观定制 — 交付说明
 
-> 日期：2026-08-19 ｜ 状态：**v3 修复 3 项二轮问题，待复验** ｜ 基线：M4-A 布局导入/导出已交付（67e857b）
+> 日期：2026-08-19 ｜ 状态：**v4 修复弹窗布局+emoji间距，待复验** ｜ 基线：M4-A（67e857b）
 > 范围：对标 Stardock Fences 的外观定制——圆角、半透明、标题样式、毛玻璃（实验性）。
 
 ---
@@ -92,9 +92,22 @@
 - `FenceAppearanceForm.cs`：重写布局——动态高度 + 毛玻璃滑块 + MinimumSize 保护
 - `FenceLayer.cs`：居中标题分字体绘制 + `_appearance.FrostOpacity` 替代硬编码
 
+## 7. v4 三轮修复（2026-08-19）
+
+用户 v3 复验发现 2 项残留问题：
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | emoji 与文字间距过大 | 居中测量用 `StringFormat.GenericTypographic`(含额外排版度量)，与绘制用的 `sf`(NoWrap+Center) 宽度不一致，导致起始 X 偏左太多 | 测量改用**与绘制相同的 `sf`** StringFormat，宽度精确匹配 |
+| 2 | 弹窗仍截断（TrackBar 挡住下一行） | 固定 `rowH` 在高 DPI/不同主题下仍不够（该用户系统 TrackBar > 56px） | **彻底重写布局**：弃用手动定位 + 固定行高，改用 `TableLayoutPanel` + `AutoSize`/`AutoSizeMode.GrowAndShrink`，WinForms 自动适配任意 DPI/主题；按钮区用 `FlowLayoutPanel` 右对齐锚定底部 |
+
+### 变更文件
+- `FenceAppearanceForm.cs`：**TableLayoutPanel + AutoSize 重构**，不再依赖固定 rowH
+- `FenceLayer.cs`：MeasureString 改用 `sf` 替代 `GenericTypographic`
+
 ---
 
-## 7. 已知限制 / 后续
+## 8. 已知限制 / 后续
 
 - 毛玻璃为**实验性**：多显示器虚拟屏较大时首帧模糊略慢；拖拽时复用缓存规避卡顿。
 - 真正的 DWM acrylic/mica 与当前 layered 架构不兼容，本方案用"截屏+模糊"务实实现。

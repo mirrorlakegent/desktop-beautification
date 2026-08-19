@@ -1554,17 +1554,18 @@ public sealed class FenceLayer
             string label = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
             if (titleAlign == StringAlignment.Center)
             {
-                // Measure both parts with their respective fonts.
+                // Measure both parts with the SAME StringFormat used for drawing (sf),
+                // so the rendered width matches exactly — GenericTypographic overestimates.
                 float totalW = 0f;
                 float emojiW = 0f;
                 if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
                 {
                     using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
                     string prefix = b.IconRef + " ";
-                    emojiW = g.MeasureString(prefix, emojiFont, int.MaxValue, StringFormat.GenericTypographic).Width;
+                    emojiW = g.MeasureString(prefix, emojiFont, int.MaxValue, sf).Width;
                     totalW += emojiW;
                 }
-                float labelW = g.MeasureString(label, titleFont, int.MaxValue, StringFormat.GenericTypographic).Width;
+                float labelW = g.MeasureString(label, titleFont, int.MaxValue, sf).Width;
                 totalW += labelW;
 
                 // Center the combined block within the header area (minus chevron).

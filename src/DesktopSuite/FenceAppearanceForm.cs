@@ -4,10 +4,9 @@ using System.Windows.Forms;
 namespace DesktopSuite;
 
 /// <summary>
-/// M4-B: fence box appearance editor. A small modal WinForms dialog (matching the existing
-/// <c>VolumeForm</c> look) that exposes the user-tunable appearance properties and pushes
-/// LIVE previews back through <paramref name="onPreview"/> on every change. "确定" commits
-/// (DialogResult.OK); "取消" discards (the caller reverts the live preview).
+/// M4-B: fence box appearance editor. A modal WinForms dialog with <see cref="TableLayoutPanel"/>
+/// + <see cref="AutoSize"/> so the layout adapts to any DPI / theme / TrackBar height.
+/// "确定" commits (DialogResult.OK); "取消" discards (caller reverts live preview).
 /// </summary>
 public sealed class FenceAppearanceForm : Form
 {
@@ -43,39 +42,50 @@ public sealed class FenceAppearanceForm : Form
         Text = "围栏外观";
         BackColor = Color.FromArgb(255, 28, 30, 38);
         ForeColor = Color.FromArgb(255, 220, 224, 232);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        int left = 16, width = 312, top = 14, rowH = 56;
+        int width = 310; // trackbar/combobox width inside padding
+
+        var tlp = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 0, // we add rows dynamically
+            Padding = new Padding(16, 14, 16, 8),
+        };
+        tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        Controls.Add(tlp);
+
+        // Helper: append a row and return its index.
+        int AddRow() { int r = tlp.RowCount++; tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize)); return r; }
 
         // --- 圆角半径 ---
-        AddLabel("圆角半径", left, top);
-        _cornerTrack = AddTrack(left, top + 16, width, 0, 40, _appearance.CornerRadius);
-        _cornerLabel = AddValueLabel(left + width - 60, top, $"{_appearance.CornerRadius} px");
-        top += rowH;
+        int r = AddRow(); tlp.Controls.Add(MakeLabel("圆角半径"), 0, r);
+        r = AddRow(); _cornerTrack = MakeTrack(width, 0, 40, _appearance.CornerRadius); tlp.Controls.Add(_cornerTrack, 0, r);
+        r = AddRow(); _cornerLabel = MakeValueLabel($"{_appearance.CornerRadius} px"); tlp.Controls.Add(_cornerLabel, 0, r);
 
         // --- 主体透明度 ---
-        AddLabel("主体透明度（越大越不透明）", left, top);
-        _bodyTrack = AddTrack(left, top + 16, width, 0, 255, _appearance.BodyOpacity);
-        _bodyLabel = AddValueLabel(left + width - 60, top, $"{_appearance.BodyOpacity}");
-        top += rowH;
+        r = AddRow(); tlp.Controls.Add(MakeLabel("主体透明度（越大越不透明）"), 0, r);
+        r = AddRow(); _bodyTrack = MakeTrack(width, 0, 255, _appearance.BodyOpacity); tlp.Controls.Add(_bodyTrack, 0, r);
+        r = AddRow(); _bodyLabel = MakeValueLabel($"{_appearance.BodyOpacity}"); tlp.Controls.Add(_bodyLabel, 0, r);
 
         // --- 标题栏透明度 ---
-        AddLabel("标题栏透明度（越大越不透明）", left, top);
-        _headerTrack = AddTrack(left, top + 16, width, 0, 255, _appearance.HeaderOpacity);
-        _headerLabel = AddValueLabel(left + width - 60, top, $"{_appearance.HeaderOpacity}");
-        top += rowH;
+        r = AddRow(); tlp.Controls.Add(MakeLabel("标题栏透明度（越大越不透明）"), 0, r);
+        r = AddRow(); _headerTrack = MakeTrack(width, 0, 255, _appearance.HeaderOpacity); tlp.Controls.Add(_headerTrack, 0, r);
+        r = AddRow(); _headerLabel = MakeValueLabel($"{_appearance.HeaderOpacity}"); tlp.Controls.Add(_headerLabel, 0, r);
 
         // --- 标题字号 ---
-        AddLabel("标题字号", left, top);
-        _fontTrack = AddTrack(left, top + 16, width, 8, 32, (int)Math.Round(_appearance.TitleFontSize));
-        _fontLabel = AddValueLabel(left + width - 60, top, $"{_appearance.TitleFontSize:F0} px");
-        top += rowH;
+        r = AddRow(); tlp.Controls.Add(MakeLabel("标题字号"), 0, r);
+        r = AddRow(); _fontTrack = MakeTrack(width, 8, 32, (int)Math.Round(_appearance.TitleFontSize)); tlp.Controls.Add(_fontTrack, 0, r);
+        r = AddRow(); _fontLabel = MakeValueLabel($"{_appearance.TitleFontSize:F0} px"); tlp.Controls.Add(_fontLabel, 0, r);
 
         // --- 标题对齐 ---
-        AddLabel("标题对齐", left, top);
+        r = AddRow(); tlp.Controls.Add(MakeLabel("标题对齐"), 0, r);
         _alignBox = new ComboBox
         {
-            Left = left,
-            Top = top + 16,
             Width = width,
             DropDownStyle = ComboBoxStyle.DropDownList,
             BackColor = Color.FromArgb(255, 40, 44, 54),
@@ -85,78 +95,63 @@ public sealed class FenceAppearanceForm : Form
         _alignBox.Items.Add("居中");
         _alignBox.SelectedIndex = _appearance.TitleAlign == 1 ? 1 : 0;
         _alignBox.SelectedIndexChanged += (_, _) => Fire();
-        Controls.Add(_alignBox);
-        top += rowH;
+        r = AddRow(); tlp.Controls.Add(_alignBox, 0, r);
 
         // --- 显示图标字形 ---
         _glyphBox = new CheckBox
         {
             Text = "显示分类图标（emoji 字形）",
-            Left = left,
-            Top = top + 4,
             Width = width,
             Checked = _appearance.ShowGlyph,
             ForeColor = Color.FromArgb(255, 220, 224, 232)
         };
         _glyphBox.CheckedChanged += (_, _) => Fire();
-        Controls.Add(_glyphBox);
-        top += rowH - 8;
+        r = AddRow(); tlp.Controls.Add(_glyphBox, 0, r);
 
-        // --- 毛玻璃（实验）---
+        // --- 毛玻璃 ---
         _frostBox = new CheckBox
         {
             Text = "毛玻璃背景（实验性，可能卡顿）",
-            Left = left,
-            Top = top + 4,
             Width = width,
             Checked = _appearance.Frosted,
             ForeColor = Color.FromArgb(255, 220, 224, 232)
         };
         _frostBox.CheckedChanged += (_, _) => { UpdateFrostEnabled(); Fire(); };
-        Controls.Add(_frostBox);
-        top += rowH - 8;
+        r = AddRow(); tlp.Controls.Add(_frostBox, 0, r);
 
         // --- 毛玻璃着色透明度 ---
-        AddLabel("毛玻璃着色（越小越透）", left, top);
-        _frostOpacityTrack = AddTrack(left, top + 16, width, 0, 200, _appearance.FrostOpacity);
-        _frostOpacityLabel = AddValueLabel(left + width - 60, top, $"{_appearance.FrostOpacity}");
-        UpdateFrostEnabled(); // disable/enable based on checkbox
-        top += rowH;
+        r = AddRow(); tlp.Controls.Add(MakeLabel("毛玻璃着色（越小越透）"), 0, r);
+        r = AddRow(); _frostOpacityTrack = MakeTrack(width, 0, 200, _appearance.FrostOpacity); tlp.Controls.Add(_frostOpacityTrack, 0, r);
+        r = AddRow(); _frostOpacityLabel = MakeValueLabel($"{_appearance.FrostOpacity}"); tlp.Controls.Add(_frostOpacityLabel, 0, r);
 
-        // --- Buttons: position relative to content bottom, not fixed Height-N ---
-        int btnTop = top + 16;
-        int neededHeight = btnTop + 48; // button height + bottom padding
-        if (neededHeight > Height) Height = neededHeight;
+        // --- Buttons ---
+        UpdateFrostEnabled();
 
-        var cancel = new Button
+        var btnPanel = new FlowLayoutPanel
         {
-            Text = "取消",
-            Left = left + width - 168,
-            Top = btnTop,
-            Width = 80,
-            Height = 32,
-            DialogResult = DialogResult.Cancel,
-            BackColor = Color.FromArgb(255, 50, 54, 64),
-            ForeColor = Color.White
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(0, 8, 16, 12),
+            Height = 44
         };
+
         var ok = new Button
         {
-            Text = "确定",
-            Left = left + width - 80,
-            Top = btnTop,
-            Width = 80,
-            Height = 32,
+            Text = "确定", Width = 80, Height = 32,
             DialogResult = DialogResult.OK,
-            BackColor = Color.FromArgb(255, 40, 120, 200),
-            ForeColor = Color.White
+            BackColor = Color.FromArgb(255, 40, 120, 200), ForeColor = Color.White
         };
-        Controls.Add(cancel);
-        Controls.Add(ok);
+        var cancel = new Button
+        {
+            Text = "取消", Width = 80, Height = 32, Margin = new Padding(0, 0, 8, 0),
+            DialogResult = DialogResult.Cancel,
+            BackColor = Color.FromArgb(255, 50, 54, 64), ForeColor = Color.White
+        };
+        btnPanel.Controls.Add(ok);
+        btnPanel.Controls.Add(cancel);
+        Controls.Add(btnPanel);
         AcceptButton = ok;
         CancelButton = cancel;
-
-        // Minimum size to prevent buttons from being clipped.
-        MinimumSize = new Size(Width, neededHeight);
 
         // Wire live preview.
         _cornerTrack.ValueChanged += (_, _) => { _cornerLabel.Text = $"{_cornerTrack.Value} px"; Fire(); };
@@ -175,50 +170,24 @@ public sealed class FenceAppearanceForm : Form
         _frostOpacityLabel.Enabled = on;
     }
 
-    private Label AddLabel(string text, int left, int top)
+    private static Label MakeLabel(string text) => new()
     {
-        var l = new Label
-        {
-            Text = text,
-            Left = left,
-            Top = top,
-            Width = 280,
-            ForeColor = Color.FromArgb(255, 200, 204, 212)
-        };
-        Controls.Add(l);
-        return l;
-    }
+        Text = text, AutoSize = true,
+        ForeColor = Color.FromArgb(255, 200, 204, 212)
+    };
 
-    private Label AddValueLabel(int left, int top, string text)
+    private static Label MakeValueLabel(string text) => new()
     {
-        var l = new Label
-        {
-            Text = text,
-            Left = left,
-            Top = top,
-            Width = 60,
-            TextAlign = ContentAlignment.TopRight,
-            ForeColor = Color.FromArgb(255, 150, 210, 255)
-        };
-        Controls.Add(l);
-        return l;
-    }
+        Text = text, AutoSize = true, TextAlign = ContentAlignment.TopRight,
+        ForeColor = Color.FromArgb(255, 150, 210, 255), Anchor = AnchorStyles.Right
+    };
 
-    private TrackBar AddTrack(int left, int top, int width, int min, int max, int value)
+    private static TrackBar MakeTrack(int width, int min, int max, int value) => new()
     {
-        var t = new TrackBar
-        {
-            Left = left,
-            Top = top,
-            Width = width,
-            Minimum = min,
-            Maximum = max,
-            Value = value,
-            TickStyle = TickStyle.None
-        };
-        Controls.Add(t);
-        return t;
-    }
+        Width = width, AutoSize = false,
+        Minimum = min, Maximum = max, Value = value,
+        TickStyle = TickStyle.None
+    };
 
     private void Fire()
     {
