@@ -61,6 +61,8 @@ public sealed class AppSettings
     public bool FenceShowGlyph { get; set; } = true;
     /// <summary>Frosted-glass (毛玻璃) mode: blur the wallpaper behind each box. Experimental; off by default.</summary>
     public bool FenceFrosted { get; set; } = false;
+    /// <summary>Frosted glass tint opacity (0-255). Lower = more transparent.</summary>
+    public int FenceFrostOpacity { get; set; } = 50;
 
     private static readonly string FilePath =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

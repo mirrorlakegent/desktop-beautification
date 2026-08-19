@@ -5,7 +5,7 @@ namespace DesktopSuite;
 
 /// <summary>
 /// M4-B: fence box appearance editor. A small modal WinForms dialog (matching the existing
-/// <c>VolumeForm</c> look) that exposes the seven user-tunable appearance properties and pushes
+/// <c>VolumeForm</c> look) that exposes the user-tunable appearance properties and pushes
 /// LIVE previews back through <paramref name="onPreview"/> on every change. "确定" commits
 /// (DialogResult.OK); "取消" discards (the caller reverts the live preview).
 /// </summary>
@@ -26,6 +26,8 @@ public sealed class FenceAppearanceForm : Form
     private readonly ComboBox _alignBox;
     private readonly CheckBox _glyphBox;
     private readonly CheckBox _frostBox;
+    private readonly TrackBar _frostOpacityTrack;
+    private readonly Label _frostOpacityLabel;
 
     public FenceAppearanceForm(FenceAppearance initial, Action<FenceAppearance> onPreview)
     {
@@ -39,8 +41,6 @@ public sealed class FenceAppearanceForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Text = "围栏外观";
-        Width = 360;
-        Height = 480;
         BackColor = Color.FromArgb(255, 28, 30, 38);
         ForeColor = Color.FromArgb(255, 220, 224, 232);
 
@@ -112,16 +112,27 @@ public sealed class FenceAppearanceForm : Form
             Checked = _appearance.Frosted,
             ForeColor = Color.FromArgb(255, 220, 224, 232)
         };
-        _frostBox.CheckedChanged += (_, _) => Fire();
+        _frostBox.CheckedChanged += (_, _) => { UpdateFrostEnabled(); Fire(); };
         Controls.Add(_frostBox);
         top += rowH - 8;
 
-        // --- 按钮 ---
+        // --- 毛玻璃着色透明度 ---
+        AddLabel("毛玻璃着色（越小越透）", left, top);
+        _frostOpacityTrack = AddTrack(left, top + 16, width, 0, 200, _appearance.FrostOpacity);
+        _frostOpacityLabel = AddValueLabel(left + width - 60, top, $"{_appearance.FrostOpacity}");
+        UpdateFrostEnabled(); // disable/enable based on checkbox
+        top += rowH;
+
+        // --- Buttons: position relative to content bottom, not fixed Height-N ---
+        int btnTop = top + 16;
+        int neededHeight = btnTop + 48; // button height + bottom padding
+        if (neededHeight > Height) Height = neededHeight;
+
         var cancel = new Button
         {
             Text = "取消",
             Left = left + width - 168,
-            Top = Height - 52,
+            Top = btnTop,
             Width = 80,
             Height = 32,
             DialogResult = DialogResult.Cancel,
@@ -132,7 +143,7 @@ public sealed class FenceAppearanceForm : Form
         {
             Text = "确定",
             Left = left + width - 80,
-            Top = Height - 52,
+            Top = btnTop,
             Width = 80,
             Height = 32,
             DialogResult = DialogResult.OK,
@@ -144,13 +155,24 @@ public sealed class FenceAppearanceForm : Form
         AcceptButton = ok;
         CancelButton = cancel;
 
+        // Minimum size to prevent buttons from being clipped.
+        MinimumSize = new Size(Width, neededHeight);
+
         // Wire live preview.
         _cornerTrack.ValueChanged += (_, _) => { _cornerLabel.Text = $"{_cornerTrack.Value} px"; Fire(); };
         _bodyTrack.ValueChanged += (_, _) => { _bodyLabel.Text = $"{_bodyTrack.Value}"; Fire(); };
         _headerTrack.ValueChanged += (_, _) => { _headerLabel.Text = $"{_headerTrack.Value}"; Fire(); };
         _fontTrack.ValueChanged += (_, _) => { _fontLabel.Text = $"{_fontTrack.Value} px"; Fire(); };
+        _frostOpacityTrack.ValueChanged += (_, _) => { _frostOpacityLabel.Text = $"{_frostOpacityTrack.Value}"; Fire(); };
 
         _ready = true;
+    }
+
+    private void UpdateFrostEnabled()
+    {
+        bool on = _frostBox.Checked;
+        _frostOpacityTrack.Enabled = on;
+        _frostOpacityLabel.Enabled = on;
     }
 
     private Label AddLabel(string text, int left, int top)
@@ -208,6 +230,7 @@ public sealed class FenceAppearanceForm : Form
         _appearance.TitleAlign = _alignBox.SelectedIndex == 1 ? 1 : 0;
         _appearance.ShowGlyph = _glyphBox.Checked;
         _appearance.Frosted = _frostBox.Checked;
+        _appearance.FrostOpacity = _frostOpacityTrack.Value;
         _onPreview?.Invoke(_appearance.Clone());
     }
 }

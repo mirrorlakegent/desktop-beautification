@@ -1537,7 +1537,7 @@ public sealed class FenceLayer
                     g.DrawImage(_frostBmp, 0, 0);
                     g.ResetClip();
                 }
-                using var frostTint = new SolidBrush(Color.FromArgb(50, 16, 18, 24));
+                using var frostTint = new SolidBrush(Color.FromArgb(_appearance.FrostOpacity, 16, 18, 24));
                 g.FillPath(frostTint, boxPath);
             }
             else
@@ -1548,16 +1548,40 @@ public sealed class FenceLayer
 
             // Title: render the optional emoji icon with the emoji font (Segoe UI Emoji), then the
             // label with the base font. This fixes the "□□" tofu boxes from GDI+ Segoe UI.
-            // When center-aligned, draw emoji + label as a single centered string to avoid
-            // double-centering offset from the prefix/label split.
+            // When center-aligned, measure emoji+label separately (different fonts) then
+            // center the combined block manually — a single DrawString with titleFont would
+            // render emoji as tofu boxes.
             string label = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
             if (titleAlign == StringAlignment.Center)
             {
-                string fullTitle = label;
+                // Measure both parts with their respective fonts.
+                float totalW = 0f;
+                float emojiW = 0f;
                 if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
-                    fullTitle = b.IconRef + " " + label;
-                float centerW = w - CollapseBtnW;
-                g.DrawString(fullTitle, titleFont, titleBrush, new RectangleF(b.Left, b.Top, centerW, headerH), sf);
+                {
+                    using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
+                    string prefix = b.IconRef + " ";
+                    emojiW = g.MeasureString(prefix, emojiFont, int.MaxValue, StringFormat.GenericTypographic).Width;
+                    totalW += emojiW;
+                }
+                float labelW = g.MeasureString(label, titleFont, int.MaxValue, StringFormat.GenericTypographic).Width;
+                totalW += labelW;
+
+                // Center the combined block within the header area (minus chevron).
+                float availW = w - CollapseBtnW;
+                float startX = b.Left + Math.Max(pad, (availW - totalW) / 2);
+
+                // Draw emoji prefix with emoji font.
+                if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef) && emojiW > 0)
+                {
+                    using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
+                    string prefix = b.IconRef + " ";
+                    g.DrawString(prefix, emojiFont, titleBrush, new RectangleF(startX, b.Top, emojiW + 1, headerH), sf);
+                    startX += emojiW;
+                }
+                // Draw label with title font.
+                if (labelW > 0)
+                    g.DrawString(label, titleFont, titleBrush, new RectangleF(startX, b.Top, availW - (startX - b.Left), headerH), sf);
             }
             else
             {

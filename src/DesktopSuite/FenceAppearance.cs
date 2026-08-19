@@ -23,6 +23,8 @@ public sealed class FenceAppearance
     public bool ShowGlyph { get; set; } = true;
     /// <summary>Frosted-glass (毛玻璃) mode: blur the wallpaper behind each box.</summary>
     public bool Frosted { get; set; } = false;
+    /// <summary>Frosted glass tint opacity (0-255). Lower = more transparent/see-through.</summary>
+    public int FrostOpacity { get; set; } = 50;
 
     public static FenceAppearance FromSettings(AppSettings s) => new()
     {
@@ -33,6 +35,7 @@ public sealed class FenceAppearance
         TitleAlign = s.FenceTitleAlign,
         ShowGlyph = s.FenceShowGlyph,
         Frosted = s.FenceFrosted,
+        FrostOpacity = s.FenceFrostOpacity,
     };
 
     public void ApplyTo(AppSettings s)
@@ -44,6 +47,7 @@ public sealed class FenceAppearance
         s.FenceTitleAlign = TitleAlign;
         s.FenceShowGlyph = ShowGlyph;
         s.FenceFrosted = Frosted;
+        s.FenceFrostOpacity = FrostOpacity;
     }
 
     public FenceAppearance Clone() => new()
@@ -55,5 +59,6 @@ public sealed class FenceAppearance
         TitleAlign = TitleAlign,
         ShowGlyph = ShowGlyph,
         Frosted = Frosted,
+        FrostOpacity = FrostOpacity,
     };
 }
