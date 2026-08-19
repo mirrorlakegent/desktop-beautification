@@ -50,6 +50,7 @@ public sealed class FenceAppearanceForm : Form
         Text = "围栏外观";
         BackColor = Color.FromArgb(255, 28, 30, 38);
         ForeColor = Color.FromArgb(255, 220, 224, 232);
+        Font = new Font("Microsoft YaHei UI", 9F);       // explicit CJK-capable UI font
         ClientSize = new Size(520, 660);
         MinimumSize = new Size(480, 520);
 
@@ -75,7 +76,8 @@ public sealed class FenceAppearanceForm : Form
                 Left = left,
                 Top = y,
                 Width = ctrlW,
-                AutoSize = true,                 // let GDI+ measure exact height needed
+                AutoSize = true,
+                UseCompatibleTextRendering = true,       // GDI engine for stable CJK at high DPI
                 ForeColor = Color.FromArgb(255, 200, 204, 212)
             };
             panel.Controls.Add(lbl);

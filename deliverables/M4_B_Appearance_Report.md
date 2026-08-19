@@ -132,9 +132,20 @@
 ### 变更文件
 - `FenceAppearanceForm.cs`：标签 AutoSize + DWM 暗标题栏 + 窗体 520×660
 
+## 10. v7 六轮修复（2026-08-19）
+
+用户 v6 复验：暗标题栏 ✅、按钮 ✅，但**中文标签仍乱码/截断**（"主体透明度" → "土体?2透明"）。
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 中文标签乱码 | GDI+ 在高 DPI 下默认字体中文渲染异常（字体回退失败） | **显式 Font="Microsoft YaHei UI"**(9pt) + Label **UseCompatibleTextRendering=true**(GDI 引擎) |
+
+### 变更文件
+- `FenceAppearanceForm.cs`：Form.Font + Label.UseCompatibleTextRendering
+
 ---
 
-## 10. 已知限制 / 后续
+## 11. 已知限制 / 后续
 
 - 毛玻璃为**实验性**：多显示器虚拟屏较大时首帧模糊略慢；拖拽时复用缓存规避卡顿。
 - 真正的 DWM acrylic/mica 与当前 layered 架构不兼容，本方案用"截屏+模糊"务实实现。
