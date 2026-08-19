@@ -143,6 +143,21 @@
 ### 变更文件
 - `FenceAppearanceForm.cs`：Form.Font + Label.UseCompatibleTextRendering
 
+## 12. v8 七轮修复（2026-08-19）
+
+用户 v7 复验：中文乱码已修复，但 **2 项长期问题仍未解决**：
+1. 调节滑块时文字显示不全
+2. emoji 与文字离这么远
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 滑块文字/数值显示不全 | 弹窗用**固定假设 TrackBar 高度(38px)** 推进 Y 光标；用户系统 DPI/主题下 TrackBar 实际更高，后续控件(含数值标签、按钮)被上移、重叠或被窗体裁切 | Y 光标改为**按控件真实 `Bottom` 推进**（`y = ctl.Bottom + gap`），不再猜高度；数值标签改 `AutoSize` 右对齐、跟随滑块行；窗体 560×720 + `AutoScaleMode=Dpi` 适配高 DPI |
+| emoji 与文字间距过大 | `FenceLayer` 用 GDI+ `DrawString` 分字体画 emoji+标签，靠 `MeasureString` 测宽度手工偏移；GDI+ 对 emoji 返回的是**字体 advance 宽度(含巨大侧边距)**，偏移量失控 | 标题改用 **GDI `TextRenderer.DrawText`**——自动字体 fallback 到 Segoe UI Emoji 彩色字形，**一次绘制** emoji+中文，间距天然正确；彻底告别 □ 与间距 bug |
+
+### 变更文件
+- `FenceLayer.cs`：标题段改 `TextRenderer`（居中/左对齐统一用 `TextFormatFlags`，删除原 GDI+ 分字体绘制与 `titleBrush`）
+- `FenceAppearanceForm.cs`：布局改为真实 `Bottom` 推进 + `AutoScaleMode.Dpi`
+
 ---
 
 ## 11. 已知限制 / 后续

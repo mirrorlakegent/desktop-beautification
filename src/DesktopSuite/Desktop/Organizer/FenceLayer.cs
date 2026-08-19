@@ -1506,7 +1506,6 @@ public sealed class FenceLayer
         using var bodyBrush = new SolidBrush(Color.FromArgb(_appearance.BodyOpacity, 20, 22, 28));
         using var headerBrush = new SolidBrush(Color.FromArgb(_appearance.HeaderOpacity, 40, 44, 54));
         using var borderPen = new Pen(Color.FromArgb(160, 64, 70, 86), 1);         // ~63% opaque border
-        using var titleBrush = new SolidBrush(Color.FromArgb(255, 255, 255, 255)); // fully opaque white
         using var itemBrush = new SolidBrush(Color.FromArgb(235, 210, 214, 222));  // mostly opaque text
         using var titleFont = new Font("Segoe UI", (float)(_appearance.TitleFontSize * _dpiY), FontStyle.Bold);
         using var itemFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
@@ -1546,60 +1545,28 @@ public sealed class FenceLayer
             }
             FillHeaderPath(g, headerBrush, b.Left, b.Top, w, headerH, r);
 
-            // Title: render the optional emoji icon with the emoji font (Segoe UI Emoji), then the
-            // label with the base font. This fixes the "□□" tofu boxes from GDI+ Segoe UI.
-            // When center-aligned, measure emoji+label separately (different fonts) then
-            // center the combined block manually — a single DrawString with titleFont would
-            // render emoji as tofu boxes.
+            // Title: drawn with GDI TextRenderer (NOT GDI+ DrawString). TextRenderer performs
+            // automatic font fallback to Segoe UI Emoji for colored emoji and lays out the
+            // emoji+label run with correct, natural spacing — eliminating both the "□□" tofu
+            // boxes and the oversized gap caused by GDI+'s emoji advance-width measurement.
             string label = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
-            if (titleAlign == StringAlignment.Center)
-            {
-                // Measure both parts with the SAME StringFormat used for drawing (sf),
-                // so the rendered width matches exactly — GenericTypographic overestimates.
-                float totalW = 0f;
-                float emojiW = 0f;
-                if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
-                {
-                    using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
-                    string prefix = b.IconRef + " ";
-                    emojiW = g.MeasureString(prefix, emojiFont, int.MaxValue, sf).Width;
-                    totalW += emojiW;
-                }
-                float labelW = g.MeasureString(label, titleFont, int.MaxValue, sf).Width;
-                totalW += labelW;
-
-                // Center the combined block within the header area (minus chevron).
-                float availW = w - CollapseBtnW;
-                float startX = b.Left + Math.Max(pad, (availW - totalW) / 2);
-
-                // Draw emoji prefix with emoji font.
-                if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef) && emojiW > 0)
-                {
-                    using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
-                    string prefix = b.IconRef + " ";
-                    g.DrawString(prefix, emojiFont, titleBrush, new RectangleF(startX, b.Top, emojiW + 1, headerH), sf);
-                    startX += emojiW;
-                }
-                // Draw label with title font.
-                if (labelW > 0)
-                    g.DrawString(label, titleFont, titleBrush, new RectangleF(startX, b.Top, availW - (startX - b.Left), headerH), sf);
-            }
-            else
-            {
-                float titleX = b.Left + pad;
-                float titleW = w - pad * 2 - CollapseBtnW; // leave room for the collapse chevron
-                if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
-                {
-                    using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
-                    string prefix = b.IconRef + " ";
-                    var prefixSize = g.MeasureString(prefix, emojiFont, new SizeF(titleW, headerH), sf);
-                    g.DrawString(prefix, emojiFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
-                    titleX += prefixSize.Width;
-                    titleW -= prefixSize.Width;
-                }
-                if (titleW > 0)
-                    g.DrawString(label, titleFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
-            }
+            string titleText = (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
+                ? b.IconRef + " " + label
+                : label;
+            var titleFlags = TextFormatFlags.VerticalCenter
+                           | TextFormatFlags.SingleLine
+                           | TextFormatFlags.EndEllipsis;
+            titleFlags |= (titleAlign == StringAlignment.Center)
+                ? TextFormatFlags.HorizontalCenter
+                : TextFormatFlags.Left;
+            int titleW = (int)(w - CollapseBtnW);
+            TextRenderer.DrawText(
+                g,
+                titleText,
+                titleFont,
+                new Rectangle((int)b.Left, (int)b.Top, titleW, headerH),
+                Color.FromArgb(255, 255, 255, 255),
+                titleFlags);
 
             // Collapse/expand chevron in the header's right side (hit-tested as CollapseBtn).
             DrawCollapseChevron(g, b, headerH);
