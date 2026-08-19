@@ -40,11 +40,11 @@ public sealed class FenceAppearanceForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         Text = "围栏外观";
         Width = 360;
-        Height = 392;
+        Height = 480;
         BackColor = Color.FromArgb(255, 28, 30, 38);
         ForeColor = Color.FromArgb(255, 220, 224, 232);
 
-        int left = 16, width = 312, top = 14, rowH = 40;
+        int left = 16, width = 312, top = 14, rowH = 56;
 
         // --- 圆角半径 ---
         AddLabel("圆角半径", left, top);
@@ -121,8 +121,9 @@ public sealed class FenceAppearanceForm : Form
         {
             Text = "取消",
             Left = left + width - 168,
-            Top = Height - 40,
+            Top = Height - 52,
             Width = 80,
+            Height = 32,
             DialogResult = DialogResult.Cancel,
             BackColor = Color.FromArgb(255, 50, 54, 64),
             ForeColor = Color.White
@@ -131,8 +132,9 @@ public sealed class FenceAppearanceForm : Form
         {
             Text = "确定",
             Left = left + width - 80,
-            Top = Height - 40,
+            Top = Height - 52,
             Width = 80,
+            Height = 32,
             DialogResult = DialogResult.OK,
             BackColor = Color.FromArgb(255, 40, 120, 200),
             ForeColor = Color.White

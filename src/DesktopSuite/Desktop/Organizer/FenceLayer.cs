@@ -1537,7 +1537,7 @@ public sealed class FenceLayer
                     g.DrawImage(_frostBmp, 0, 0);
                     g.ResetClip();
                 }
-                using var frostTint = new SolidBrush(Color.FromArgb(90, 16, 18, 24));
+                using var frostTint = new SolidBrush(Color.FromArgb(50, 16, 18, 24));
                 g.FillPath(frostTint, boxPath);
             }
             else
@@ -1548,21 +1548,33 @@ public sealed class FenceLayer
 
             // Title: render the optional emoji icon with the emoji font (Segoe UI Emoji), then the
             // label with the base font. This fixes the "□□" tofu boxes from GDI+ Segoe UI.
+            // When center-aligned, draw emoji + label as a single centered string to avoid
+            // double-centering offset from the prefix/label split.
             string label = string.IsNullOrEmpty(b.Name) ? "未命名" : b.Name;
-            float titleX = b.Left + pad;
-            float titleW = w - pad * 2 - CollapseBtnW; // leave room for the collapse chevron
-            if (titleAlign == StringAlignment.Center) { titleX = b.Left; titleW = w - CollapseBtnW; }
-            if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
+            if (titleAlign == StringAlignment.Center)
             {
-                using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
-                string prefix = b.IconRef + " ";
-                var prefixSize = g.MeasureString(prefix, emojiFont, new SizeF(titleW, headerH), sf);
-                g.DrawString(prefix, emojiFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
-                titleX += prefixSize.Width;
-                titleW -= prefixSize.Width;
+                string fullTitle = label;
+                if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
+                    fullTitle = b.IconRef + " " + label;
+                float centerW = w - CollapseBtnW;
+                g.DrawString(fullTitle, titleFont, titleBrush, new RectangleF(b.Left, b.Top, centerW, headerH), sf);
             }
-            if (titleW > 0)
-                g.DrawString(label, titleFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
+            else
+            {
+                float titleX = b.Left + pad;
+                float titleW = w - pad * 2 - CollapseBtnW; // leave room for the collapse chevron
+                if (_appearance.ShowGlyph && !string.IsNullOrEmpty(b.IconRef))
+                {
+                    using var emojiFont = new Font("Segoe UI Emoji", (float)(13 * _dpiY), FontStyle.Regular);
+                    string prefix = b.IconRef + " ";
+                    var prefixSize = g.MeasureString(prefix, emojiFont, new SizeF(titleW, headerH), sf);
+                    g.DrawString(prefix, emojiFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
+                    titleX += prefixSize.Width;
+                    titleW -= prefixSize.Width;
+                }
+                if (titleW > 0)
+                    g.DrawString(label, titleFont, titleBrush, new RectangleF(titleX, b.Top, titleW, headerH), sf);
+            }
 
             // Collapse/expand chevron in the header's right side (hit-tested as CollapseBtn).
             DrawCollapseChevron(g, b, headerH);
@@ -1990,8 +2002,11 @@ public sealed class FenceLayer
                 // is no self-capture feedback.
                 gc.CopyFromScreen(wr.Left, wr.Top, 0, 0, new Size(_winW, _winH));
             }
-            int radius = (int)Math.Round(10 * _dpiX); // ~10 logical px blur kernel
-            _frostBmp = BoxBlur(raw, radius);
+            int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
+            var blurred = BoxBlur(raw, radius);
+            // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)
+            _frostBmp = BoxBlur(BoxBlur(blurred, radius), radius);
+            blurred.Dispose();
             HostLog.Write($"FenceLayer.EnsureFrostCapture：毛玻璃背景已捕获并模糊 size={_winW}x{_winH} radius={radius}");
         }
         catch (Exception ex)
