@@ -1,13 +1,14 @@
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace DesktopSuite;
 
 /// <summary>
 /// M4-B: fence box appearance editor.
-/// <para>Fixed-size form with generous manual layout + inner scrollable panel as safety net.
-/// Works reliably at any DPI because every control gets far more space than it needs.</para>
+/// <para>Fixed-size form with manual layout. Labels use AutoSize so Chinese text never truncates;
+/// Y-cursor advances by actual measured heights. Dark title bar via DWM immersive mode.</para>
 /// </summary>
 public sealed class FenceAppearanceForm : Form
 {
@@ -16,18 +17,23 @@ public sealed class FenceAppearanceForm : Form
     private bool _ready;
 
     private readonly TrackBar _cornerTrack;
-    private readonly Label _cornerVal;
+    private Label? _cornerVal;
     private readonly TrackBar _bodyTrack;
-    private readonly Label _bodyVal;
+    private Label? _bodyVal;
     private readonly TrackBar _headerTrack;
-    private readonly Label _headerVal;
+    private Label? _headerVal;
     private readonly TrackBar _fontTrack;
-    private readonly Label _fontVal;
+    private Label? _fontVal;
     private readonly ComboBox _alignBox;
     private readonly CheckBox _glyphBox;
     private readonly CheckBox _frostBox;
     private readonly TrackBar _frostOpacityTrack;
-    private readonly Label _frostOpacityVal;
+    private Label? _frostOpacityVal;
+
+    // DWM dark title bar
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref bool value, int size);
 
     public FenceAppearanceForm(FenceAppearance initial, Action<FenceAppearance> onPreview)
     {
@@ -44,10 +50,10 @@ public sealed class FenceAppearanceForm : Form
         Text = "围栏外观";
         BackColor = Color.FromArgb(255, 28, 30, 38);
         ForeColor = Color.FromArgb(255, 220, 224, 232);
-        ClientSize = new Size(440, 640);       // generous fixed size
-        MinimumSize = new Size(420, 500);
+        ClientSize = new Size(520, 660);
+        MinimumSize = new Size(480, 520);
 
-        // Inner panel with auto-scroll as ultimate safety net for extreme DPI.
+        // Inner scrollable panel as safety net
         var panel = new Panel
         {
             Dock = DockStyle.Fill,
@@ -56,13 +62,12 @@ public sealed class FenceAppearanceForm : Form
         };
         Controls.Add(panel);
 
-        int left = 16, ctrlW = 400;             // wide controls
+        int left = 16, ctrlW = 488;             // wide controls
         int y = 12;                              // cursor Y
-        int labelH = 22, trackH = 36, gap = 6;   // generous per-row heights
-        int sectionGap = 10;
+        int trackH = 38, gap = 8;                // row spacing
 
-        // ===== Helper lambdas =====
-        Label AddLabel(string text)
+        // ===== Helper: add auto-sizing label, advance Y by actual height =====
+        void AddLabel(string text)
         {
             var lbl = new Label
             {
@@ -70,13 +75,11 @@ public sealed class FenceAppearanceForm : Form
                 Left = left,
                 Top = y,
                 Width = ctrlW,
-                Height = labelH,
-                AutoSize = false,
+                AutoSize = true,                 // let GDI+ measure exact height needed
                 ForeColor = Color.FromArgb(255, 200, 204, 212)
             };
             panel.Controls.Add(lbl);
-            y += labelH;
-            return lbl;
+            y += lbl.Height + 2;                 // advance by rendered height + tiny gap
         }
 
         TrackBar AddTrack(int min, int max, int value)
@@ -85,7 +88,7 @@ public sealed class FenceAppearanceForm : Form
             {
                 Left = left,
                 Top = y,
-                Width = ctrlW - 60,
+                Width = ctrlW - 70,
                 Height = trackH,
                 Minimum = min,
                 Maximum = max,
@@ -93,25 +96,24 @@ public sealed class FenceAppearanceForm : Form
                 TickStyle = TickStyle.None
             };
             panel.Controls.Add(tb);
-            y += trackH;
+            y += trackH + 2;
             return tb;
         }
 
-        Label AddValueLabel(string text)
+        void AddValueLabel(ref Label? field, string text)
         {
-            var lbl = new Label
+            field = new Label
             {
                 Text = text,
-                Left = left + ctrlW - 56,
-                Top = y - trackH - 2,
-                Width = 52,
-                Height = labelH,
+                Left = left + ctrlW - 64,
+                Top = y - trackH,
+                Width = 58,
+                Height = 24,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = Color.FromArgb(255, 150, 210, 255)
             };
-            panel.Controls.Add(lbl);
-            return lbl;
+            panel.Controls.Add(field);
         }
 
         void Skip(int px) { y += px; }
@@ -119,25 +121,25 @@ public sealed class FenceAppearanceForm : Form
         // ===== 1. 圆角半径 =====
         AddLabel("圆角半径");
         _cornerTrack = AddTrack(0, 40, _appearance.CornerRadius);
-        _cornerVal = AddValueLabel($"{_appearance.CornerRadius} px");
+        AddValueLabel(ref _cornerVal, $"{_appearance.CornerRadius} px");
         Skip(gap);
 
         // ===== 2. 主体透明度 =====
         AddLabel("主体透明度（越大越不透明）");
         _bodyTrack = AddTrack(0, 255, _appearance.BodyOpacity);
-        _bodyVal = AddValueLabel($"{_appearance.BodyOpacity}");
+        AddValueLabel(ref _bodyVal, $"{_appearance.BodyOpacity}");
         Skip(gap);
 
         // ===== 3. 标题栏透明度 =====
         AddLabel("标题栏透明度（越大越不透明）");
         _headerTrack = AddTrack(0, 255, _appearance.HeaderOpacity);
-        _headerVal = AddValueLabel($"{_appearance.HeaderOpacity}");
+        AddValueLabel(ref _headerVal, $"{_appearance.HeaderOpacity}");
         Skip(gap);
 
         // ===== 4. 标题字号 =====
         AddLabel("标题字号");
         _fontTrack = AddTrack(8, 28, (int)Math.Round(Math.Clamp(_appearance.TitleFontSize, 8, 28)));
-        _fontVal = AddValueLabel($"{Math.Clamp(_appearance.TitleFontSize, 8, 28):F0} px");
+        AddValueLabel(ref _fontVal, $"{Math.Clamp(_appearance.TitleFontSize, 8, 28):F0} px");
         Skip(gap);
 
         // ===== 5. 标题对齐 =====
@@ -146,7 +148,7 @@ public sealed class FenceAppearanceForm : Form
         {
             Left = left,
             Top = y,
-            Width = Math.Min(ctrlW, 200),
+            Width = 180,
             DropDownStyle = ComboBoxStyle.DropDownList,
             BackColor = Color.FromArgb(255, 40, 44, 54),
             ForeColor = Color.FromArgb(255, 220, 224, 232)
@@ -156,7 +158,7 @@ public sealed class FenceAppearanceForm : Form
         _alignBox.SelectedIndex = _appearance.TitleAlign == 1 ? 1 : 0;
         _alignBox.SelectedIndexChanged += (_, _) => Fire();
         panel.Controls.Add(_alignBox);
-        y += 28;
+        y += _alignBox.Height + 2;
         Skip(gap);
 
         // ===== 6. 显示分类图标 =====
@@ -166,13 +168,13 @@ public sealed class FenceAppearanceForm : Form
             Left = left,
             Top = y,
             Width = ctrlW,
-            Height = 26,
+            AutoSize = true,                   // let checkbox size to fit text
             Checked = _appearance.ShowGlyph,
             ForeColor = Color.FromArgb(255, 220, 224, 232)
         };
         _glyphBox.CheckedChanged += (_, _) => Fire();
         panel.Controls.Add(_glyphBox);
-        y += 26;
+        y += _glyphBox.Height + 2;
         Skip(4);
 
         // ===== 7. 毛玻璃背景 =====
@@ -182,30 +184,30 @@ public sealed class FenceAppearanceForm : Form
             Left = left,
             Top = y,
             Width = ctrlW,
-            Height = 26,
+            AutoSize = true,
             Checked = _appearance.Frosted,
             ForeColor = Color.FromArgb(255, 220, 224, 232)
         };
         _frostBox.CheckedChanged += (_, _) => { UpdateFrostEnabled(); Fire(); };
         panel.Controls.Add(_frostBox);
-        y += 26;
+        y += _frostBox.Height + 2;
         Skip(4);
 
         // ===== 8. 毛玻璃着色 =====
         AddLabel("毛玻璃着色（越小越透）");
         _frostOpacityTrack = AddTrack(0, 200, _appearance.FrostOpacity);
-        _frostOpacityVal = AddValueLabel($"{_appearance.FrostOpacity}");
-        Skip(sectionGap);
+        AddValueLabel(ref _frostOpacityVal, $"{_appearance.FrostOpacity}");
+        Skip(16);
 
-        // ===== 9. 按钮（放在 scrollable panel 内部最底部） =====
+        // ===== 9. 按钮 =====
         var btnPanel = new FlowLayoutPanel
         {
             Left = left,
             Top = y,
             Width = ctrlW,
-            Height = 44,
+            Height = 48,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(0, 8, 0, 0)
+            Padding = new Padding(0, 12, 0, 0)
         };
 
         var ok = new Button
@@ -222,7 +224,7 @@ public sealed class FenceAppearanceForm : Form
             Text = "取消",
             Width = 80,
             Height = 32,
-            Margin = new Padding(0, 0, 10, 0),
+            Margin = new Padding(0, 0, 12, 0),
             DialogResult = DialogResult.Cancel,
             BackColor = Color.FromArgb(255, 50, 54, 64),
             ForeColor = Color.White
@@ -235,21 +237,28 @@ public sealed class FenceAppearanceForm : Form
         CancelButton = cancel;
 
         // ===== Wire live preview =====
-        _cornerTrack.ValueChanged += (_, _) => { _cornerVal.Text = $"{_cornerTrack.Value} px"; Fire(); };
-        _bodyTrack.ValueChanged += (_, _) => { _bodyVal.Text = $"{_bodyTrack.Value}"; Fire(); };
-        _headerTrack.ValueChanged += (_, _) => { _headerVal.Text = $"{_headerTrack.Value}"; Fire(); };
-        _fontTrack.ValueChanged += (_, _) => { _fontVal.Text = $"{_fontTrack.Value} px"; Fire(); };
-        _frostOpacityTrack.ValueChanged += (_, _) => { _frostOpacityVal.Text = $"{_frostOpacityTrack.Value}"; Fire(); };
+        _cornerTrack.ValueChanged += (_, _) => { _cornerVal!.Text = $"{_cornerTrack.Value} px"; Fire(); };
+        _bodyTrack.ValueChanged += (_, _) => { _bodyVal!.Text = $"{_bodyTrack.Value}"; Fire(); };
+        _headerTrack.ValueChanged += (_, _) => { _headerVal!.Text = $"{_headerTrack.Value}"; Fire(); };
+        _fontTrack.ValueChanged += (_, _) => { _fontVal!.Text = $"{_fontTrack.Value} px"; Fire(); };
+        _frostOpacityTrack.ValueChanged += (_, _) => { _frostOpacityVal!.Text = $"{_frostOpacityTrack.Value}"; Fire(); };
 
         UpdateFrostEnabled();
         _ready = true;
+
+        // Apply dark title bar after handle is created (DWM needs valid HWND).
+        Shown += (_, _) =>
+        {
+            bool dark = true;
+            DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(bool));
+        };
     }
 
     private void UpdateFrostEnabled()
     {
         bool on = _frostBox.Checked;
         _frostOpacityTrack.Enabled = on;
-        _frostOpacityVal.Enabled = on;
+        _frostOpacityVal!.Enabled = on;
     }
 
     private void Fire()
