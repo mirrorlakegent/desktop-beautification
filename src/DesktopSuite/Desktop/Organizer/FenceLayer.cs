@@ -1535,6 +1535,11 @@ public sealed class FenceLayer
             // Body + header. When Frosted is on, the body is the blurred desktop backdrop
             // (clipped to the rounded box) with a light dark tint for legibility; otherwise the
             // flat semi-transparent dark fill.
+            //
+            // IMPORTANT: GDI+ SolidBrush with alpha=0 has a known quirk where it does NOT render
+            // as fully transparent — it may appear white or opaque depending on the GDI+ version/DPI.
+            // Fix: skip the fill entirely when opacity is near-zero so the initial Clear(transparent)
+            // shows the desktop wallpaper through naturally.
             int headerH = Math.Min(hh, h);
             if (_appearance.Frosted && _frostBmp != null)
             {
@@ -1545,14 +1550,20 @@ public sealed class FenceLayer
                     g.DrawImage(_frostBmp, 0, 0);
                     g.ResetClip();
                 }
-                using var frostTint = new SolidBrush(Color.FromArgb(_appearance.FrostOpacity, 16, 18, 24));
-                g.FillPath(frostTint, boxPath);
+                if (_appearance.FrostOpacity > 3)
+                {
+                    using var frostTint = new SolidBrush(Color.FromArgb(_appearance.FrostOpacity, 16, 18, 24));
+                    g.FillPath(frostTint, boxPath);
+                }
             }
-            else
+            else if (_appearance.BodyOpacity > 3)
             {
                 FillRoundedRect(g, bodyBrush, b.Left, b.Top, w, h, r);
             }
-            FillHeaderPath(g, headerBrush, b.Left, b.Top, w, headerH, r);
+            if (_appearance.HeaderOpacity > 3)
+            {
+                FillHeaderPath(g, headerBrush, b.Left, b.Top, w, headerH, r);
+            }
 
             // Title: drawn with GDI TextRenderer (NOT GDI+ DrawString). TextRenderer performs
             // automatic font fallback to Segoe UI Emoji for colored emoji and lays out the
@@ -1968,8 +1979,17 @@ public sealed class FenceLayer
                 int bytes = data.Stride * bmp.Height;
                 for (int i = 0; i < bytes; i += 4)
                 {
-                    byte a = ptr[i + 3];
-                    if (a == 0 || a == 255) continue; // fully transparent / opaque need no change
+                byte a = ptr[i + 3];
+                if (a == 255) continue; // fully opaque needs no change
+                if (a == 0)
+                {
+                    // Alpha=0 must have RGB=(0,0,0) for correct premultiplied format.
+                    // Non-zero RGB with alpha=0 can leak as white/garbage in some DWM paths.
+                    ptr[i] = 0;     // B
+                    ptr[i + 1] = 0; // G
+                    ptr[i + 2] = 0; // R
+                    continue;
+                }
                     ptr[i]     = (byte)(ptr[i]     * a / 255); // B
                     ptr[i + 1] = (byte)(ptr[i + 1] * a / 255); // G
                     ptr[i + 2] = (byte)(ptr[i + 2] * a / 255); // R
