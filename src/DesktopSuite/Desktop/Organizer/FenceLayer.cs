@@ -183,8 +183,17 @@ public sealed class FenceLayer
     public void SetAppearance(FenceAppearance appearance)
     {
         if (appearance == null) return;
+        // Defense-in-depth: clamp to safe ranges so fences are never invisible.
+        var safe = appearance.Clone();
+        safe.CornerRadius =   Math.Clamp(safe.CornerRadius,   0, 40);
+        safe.BodyOpacity =    Math.Clamp(safe.BodyOpacity,    40, 255);   // min 40 → always faintly visible
+        safe.HeaderOpacity =  Math.Clamp(safe.HeaderOpacity,  80, 255);   // min 80 → header always readable
+        safe.TitleFontSize =  Math.Clamp(safe.TitleFontSize,  8f, 28f);
+        safe.TitleAlign =     Math.Clamp(safe.TitleAlign,     0, 1);
+        safe.FrostOpacity =   Math.Clamp(safe.FrostOpacity,   0, 200);
+
         bool frostedWasOn = _appearance.Frosted;
-        _appearance = appearance.Clone();
+        _appearance = safe;
         // Turning frosted OFF (or changing the radius) invalidates the cached backdrop capture.
         if (!_appearance.Frosted || _appearance.CornerRadius != appearance.CornerRadius)
             InvalidateFrost();

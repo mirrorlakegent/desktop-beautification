@@ -1,6 +1,6 @@
 # M4-B 外观定制 — 交付说明
 
-> 日期：2026-08-19 ｜ 状态：**v6 标签AutoSize+暗标题栏，待复验** ｜ 基线：M4-A（67e857b）
+> 日期：2026-08-20 ｜ 状态：**v9 修复透明度失效（settings 脏数据+clamp 防御），待复验** ｜ 基线：M4-A（67e857b）
 > 范围：对标 Stardock Fences 的外观定制——圆角、半透明、标题样式、毛玻璃（实验性）。
 
 ---
@@ -160,7 +160,39 @@
 
 ---
 
-## 11. 已知限制 / 后续
+## 12. v9 九轮修复（2026-08-20）
+
+用户 v8 复验：弹窗布局与 emoji 已修复 ✅，但**透明度调节完全失效**——围栏几乎不可见。
+
+### 根因
+
+`settings.json` 中存了之前某轮迭代保存的**极端脏数据**：
+
+| 属性 | 脏值 | 正常默认 |
+|------|------|---------|
+| `FenceBodyOpacity` | **0**（完全透明！） | 180 |
+| `FenceHeaderOpacity` | **255**（完全不透明） | 200 |
+| `FenceCornerRadius` | **40**（最大） | 10 |
+| `FenceFrostOpacity` | **0** | 50 |
+
+`AppSettings.Load()` 反序列化后无任何 clamp 校验，脏值直接传入渲染管线 → 围栏不可见。
+
+### 修复
+
+| # | 修复 | 说明 |
+|---|------|------|
+| 1 | `AppSettings.Load()` 加 clamp | 加载后立即 `Math.Clamp` 所有外观属性到安全范围；BodyOpacity 最小 **40**（始终微弱可见）、HeaderOpacity 最小 **80**（标题始终可读） |
+| 2 | `FenceLayer.SetAppearance()` 加防御性 clamp | 即使绕过 Load() 直接传入坏值也不会渲染出不可见围栏 |
+| 3 | 修正用户 settings.json | 立即恢复为正常默认值 |
+
+### 变更文件
+- `AppSettings.cs`：Load() 加 7 项外观属性 clamp
+- `FenceLayer.cs`：SetAppearance() 加防御性 clamp
+- `settings.json`：用户本地文件已修正
+
+---
+
+## 13. 已知限制 / 后续
 
 - 毛玻璃为**实验性**：多显示器虚拟屏较大时首帧模糊略慢；拖拽时复用缓存规避卡顿。
 - 真正的 DWM acrylic/mica 与当前 layered 架构不兼容，本方案用"截屏+模糊"务实实现。

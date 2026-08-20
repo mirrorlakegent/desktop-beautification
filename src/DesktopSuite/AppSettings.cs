@@ -76,7 +76,18 @@ public sealed class AppSettings
             {
                 var json = File.ReadAllText(FilePath);
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json);
-                if (loaded != null) return loaded;
+                if (loaded != null)
+                {
+                    // Clamp fence appearance values to safe ranges — prevents invisible fences
+                    // when settings were saved with extreme slider positions from a buggy build.
+                    loaded.FenceCornerRadius =   Math.Clamp(loaded.FenceCornerRadius,   0, 40);
+                    loaded.FenceBodyOpacity =    Math.Clamp(loaded.FenceBodyOpacity,    40, 255);   // min 40 → always faintly visible
+                    loaded.FenceHeaderOpacity =  Math.Clamp(loaded.FenceHeaderOpacity,  80, 255);   // min 80 → header always readable
+                    loaded.FenceTitleFontSize =  Math.Clamp((int)loaded.FenceTitleFontSize, 8, 28);
+                    loaded.FenceTitleAlign =     Math.Clamp(loaded.FenceTitleAlign,     0, 1);
+                    loaded.FenceFrostOpacity =   Math.Clamp(loaded.FenceFrostOpacity,   0, 200);
+                    return loaded;
+                }
 
                 // File exists but deserialized to null — treat as corrupt.
                 BackupCorrupt(FilePath);
