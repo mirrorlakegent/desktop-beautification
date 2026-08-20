@@ -1447,6 +1447,13 @@ public sealed class FenceLayer
                     // "＋ 新建分类" tile from _boxRects.
                     EnsureFrostCapture();
                     DrawBoxes(g);
+
+                    // v12: Post-process body alpha at the pixel level. This completely bypasses GDI+'s
+                    // unreliable low-alpha compositing (which renders dark fills as white/pale gray).
+                    // We directly scale every pixel's alpha inside each box's body region by
+                    // BodyOpacity/255 — so item labels, icons, and any other content fade naturally
+                    // along with the body, and opacity=0 produces genuinely transparent pixels.
+                    ApplyBodyAlpha(bmp);
                 }
             }
 
@@ -1565,9 +1572,11 @@ public sealed class FenceLayer
             }
             else if (_appearance.BodyOpacity > 3)
             {
-                // Body fill — ColorMatrix path works at every alpha (fast enough; temp bitmap is cached).
+                // Body fill — always drawn at FULL opacity (255). The actual alpha scaling is
+                // handled by ApplyBodyAlpha (pixel-level post-processing after DrawBoxes),
+                // which bypasses GDI+'s unreliable low-alpha compositing entirely.
                 FillRoundedRectWithAlpha(g, b.Left, b.Top, w, h, r,
-                    _appearance.BodyOpacity, 20, 22, 28);
+                    255, 20, 22, 28);
             }
             if (_appearance.HeaderOpacity > 3)
             {
@@ -2003,6 +2012,140 @@ public sealed class FenceLayer
                     ptr[i]     = (byte)(ptr[i]     * a / 255); // B
                     ptr[i + 1] = (byte)(ptr[i + 1] * a / 255); // G
                     ptr[i + 2] = (byte)(ptr[i + 2] * a / 255); // R
+                }
+            }
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+        }
+    }
+
+    /// <summary>
+    /// v12: Post-process body alpha at the pixel level — completely bypasses GDI+'s unreliable
+    /// low-alpha compositing. After <see cref="DrawBoxes"/> has rendered all GDI+ content
+    /// (headers, borders, titles, icons, labels), this method locks the bitmap and directly
+    /// scales every pixel's alpha channel inside each box's BODY region (rounded rect MINUS
+    /// the header strip) by <c>BodyOpacity / 255.0</c>.
+    /// <para>
+    /// Why this is needed: GDI+ SolidBrush with low alpha (&lt; ~60) on Format32bppArgb renders
+    /// dark fills as pale gray/white — a known GDI+ defect. The v11 ColorMatrix workaround
+    /// (draw opaque to temp bitmap, then alpha-blend with ColorMatrix) also failed because
+    /// OTHER GDI+ operations (TextRenderer, DrawString, anti-aliased edges) still leave
+    /// non-zero RGB pixels that composite as white at near-zero body opacity.
+    /// </para>
+    /// <para>
+    /// This pixel-level approach is slow O(total_pixels) but correct: at BodyOpacity=0 every
+    /// body pixel becomes (0,0,0,0) → genuinely transparent after PremultiplyAlpha → DWM
+    /// shows the desktop wallpaper through. At BodyOpacity=255 pixels are unchanged.
+    /// </para>
+    /// </summary>
+    private void ApplyBodyAlpha(Bitmap bmp)
+    {
+        int bodyA = _appearance.BodyOpacity;
+        if (bodyA >= 255) return;          // full opacity — nothing to scale
+
+        float scale = bodyA / 255.0f;       // alpha multiplier (0.0 → fully transparent)
+        int rPx = (int)Math.Round(_appearance.CornerRadius * _dpiX);
+        int headerH = (int)Math.Round(HeaderHeight * _dpiY);
+
+        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+        try
+        {
+            unsafe
+            {
+                byte* ptr = (byte*)data.Scan0;
+                int stride = data.Stride;
+
+                for (int bi = 0; bi < _boxRects.Count; bi++)
+                {
+                    var b = _boxRects[bi];
+                    int bx = b.Left, by = b.Top;
+                    int bw = b.Right - b.Left, bh = b.Bottom - b.Top;
+                    if (bw <= 0 || bh <= 0) continue;
+
+                    int r = Math.Min(rPx, Math.Min(bw, bh) / 2);
+
+                    // Body region: full box rectangle MINUS the header strip at the top.
+                    // Pixels in the header area keep their original alpha (controlled by HeaderOpacity).
+                    int bodyTop = by + headerH;
+                    int bodyH = bh - headerH;
+                    if (bodyH <= 0) continue;
+
+                    // Clamp to bitmap bounds
+                    int startX = Math.Max(bx, 0);
+                    int startY = Math.Max(bodyTop, 0);
+                    int endX = Math.Min(bx + bw, bmp.Width);
+                    int endY = Math.Min(bodyTop + bodyH, bmp.Height);
+
+                    for (int y = startY; y < endY; y++)
+                    {
+                        for (int x = startX; x < endX; x++)
+                        {
+                            // Check if this pixel is inside the rounded rect (excluding the header area
+                            // which we already skipped via startY/bodyTop). For the body area we only
+                            // need to check the bottom corners and vertical edges:
+                            // - Left edge: x must be ≥ bx+r OR inside left-bottom quarter-circle
+                            // - Right edge: x must be ≤ bx+bw-r-1 OR inside right-bottom quarter-circle
+                            bool inside;
+                            int relX = x - bx;
+                            int relY = y - by;
+
+                            if (relY >= bh - r && r > 0)
+                            {
+                                // Bottom corner zone — check distance from corner centers
+                                if (relX < r)
+                                {
+                                    // Bottom-left corner
+                                    double dx = relX - r;
+                                    double dy = relY - (bh - r);
+                                    inside = (dx * dx + dy * dy) <= (long)r * r;
+                                }
+                                else if (relX >= bw - r)
+                                {
+                                    // Bottom-right corner
+                                    double dx = relX - (bw - r);
+                                    double dy = relY - (bh - r);
+                                    inside = (dx * dx + dy * dy) <= (long)r * r;
+                                }
+                                else
+                                {
+                                    inside = true; // Between the two bottom corners
+                                }
+                            }
+                            else
+                            {
+                                // Non-corner body area (vertical sides only — top corners are in header)
+                                inside = true;
+                            }
+
+                            if (inside)
+                            {
+                                int offset = y * stride + x * 4;
+                                byte origA = ptr[offset + 3];
+                                if (origA == 0) continue; // already transparent — skip
+
+                                // Scale alpha and RGB proportionally (straight alpha format)
+                                byte newA = (byte)(origA * scale);
+                                if (newA == 0)
+                                {
+                                    // Fully transparent — zero RGB to prevent white leakage
+                                    ptr[offset] = 0;
+                                    ptr[offset + 1] = 0;
+                                    ptr[offset + 2] = 0;
+                                    ptr[offset + 3] = 0;
+                                }
+                                else
+                                {
+                                    ptr[offset]     = (byte)(ptr[offset]     * newA / origA); // B
+                                    ptr[offset + 1] = (byte)(ptr[offset + 1] * newA / origA); // G
+                                    ptr[offset + 2] = (byte)(ptr[offset + 2] * newA / origA); // R
+                                    ptr[offset + 3] = newA;                                  // A
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
