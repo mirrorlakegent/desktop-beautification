@@ -97,6 +97,7 @@ public sealed class FenceLayer
     // ---- M4-B: user-tunable box appearance ----
     private FenceAppearance _appearance = new();
     private Bitmap? _frostBmp;          // cached frosted backdrop (screen capture, blurred) — reused per session
+    private Bitmap? _alphaFillTmp;      // reusable offscreen for the ColorMatrix alpha-fill workaround
 
     // ---- M3 interaction state ----
     private FenceCategory? _dragCat;
@@ -183,11 +184,13 @@ public sealed class FenceLayer
     public void SetAppearance(FenceAppearance appearance)
     {
         if (appearance == null) return;
-        // Defense-in-depth: clamp to safe ranges so fences are never invisible.
+        // Defense-in-depth: clamp to valid ranges (0-255). 0 is allowed — it means "fully
+        // transparent" and the renderer skips the fill when opacity <= 3. This lets users achieve
+        // true transparency instead of being forced to a minimum that triggers GDI+ low-alpha bugs.
         var safe = appearance.Clone();
         safe.CornerRadius =   Math.Clamp(safe.CornerRadius,   0, 40);
-        safe.BodyOpacity =    Math.Clamp(safe.BodyOpacity,    40, 255);   // min 40 → always faintly visible
-        safe.HeaderOpacity =  Math.Clamp(safe.HeaderOpacity,  80, 255);   // min 80 → header always readable
+        safe.BodyOpacity =    Math.Clamp(safe.BodyOpacity,    0, 255);
+        safe.HeaderOpacity =  Math.Clamp(safe.HeaderOpacity,  0, 255);
         safe.TitleFontSize =  Math.Clamp(safe.TitleFontSize,  8f, 28f);
         safe.TitleAlign =     Math.Clamp(safe.TitleAlign,     0, 1);
         safe.FrostOpacity =   Math.Clamp(safe.FrostOpacity,   0, 200);
@@ -1512,9 +1515,9 @@ public sealed class FenceLayer
         // M4-B: body/header alpha + title font size are user-tunable. When Frosted is on, the body
         // is the blurred desktop backdrop (drawn per-box, clipped) instead of the flat dark fill.
         var titleAlign = _appearance.TitleAlign == 1 ? StringAlignment.Center : StringAlignment.Near;
-        using var bodyBrush = new SolidBrush(Color.FromArgb(_appearance.BodyOpacity, 20, 22, 28));
-        using var headerBrush = new SolidBrush(Color.FromArgb(_appearance.HeaderOpacity, 40, 44, 54));
-        using var borderPen = new Pen(Color.FromArgb(160, 64, 70, 86), 1);         // ~63% opaque border
+        // Border alpha scales with body opacity so a near-transparent box doesn't keep a hard frame.
+        int borderA = Math.Min(160, (int)(_appearance.BodyOpacity * 160 / 180.0));
+        using var borderPen = new Pen(Color.FromArgb(borderA, 64, 70, 86), 1);     // scales 0→160 with body
         using var itemBrush = new SolidBrush(Color.FromArgb(235, 210, 214, 222));  // mostly opaque text
         using var titleFont = new Font("Segoe UI", (float)(_appearance.TitleFontSize * _dpiY), FontStyle.Bold);
         using var itemFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
@@ -1536,10 +1539,13 @@ public sealed class FenceLayer
             // (clipped to the rounded box) with a light dark tint for legibility; otherwise the
             // flat semi-transparent dark fill.
             //
-            // IMPORTANT: GDI+ SolidBrush with alpha=0 has a known quirk where it does NOT render
-            // as fully transparent — it may appear white or opaque depending on the GDI+ version/DPI.
-            // Fix: skip the fill entirely when opacity is near-zero so the initial Clear(transparent)
-            // shows the desktop wallpaper through naturally.
+            // IMPORTANT: GDI+ SolidBrush with a LOW alpha (roughly < ~60) on a Format32bppArgb
+            // bitmap does NOT composite as expected — it renders the fill as a pale gray/white
+            // instead of a faint dark tint, which is why dragging the opacity slider toward 0
+            // turned the fence white. Fix: when the desired alpha is in the unreliable range (or
+            // any time, for consistency) we draw the shape at FULL opacity onto a temp bitmap and
+            // alpha-blend it back with a ColorMatrix. ColorMatrix alpha scaling is reliable, so the
+            // box correctly fades to transparent instead of going white.
             int headerH = Math.Min(hh, h);
             if (_appearance.Frosted && _frostBmp != null)
             {
@@ -1552,17 +1558,21 @@ public sealed class FenceLayer
                 }
                 if (_appearance.FrostOpacity > 3)
                 {
-                    using var frostTint = new SolidBrush(Color.FromArgb(_appearance.FrostOpacity, 16, 18, 24));
-                    g.FillPath(frostTint, boxPath);
+                    // Frost tint: also routed through the ColorMatrix workaround (same low-alpha bug).
+                    FillRoundedRectWithAlpha(g, b.Left, b.Top, w, h, r,
+                        _appearance.FrostOpacity, 16, 18, 24);
                 }
             }
             else if (_appearance.BodyOpacity > 3)
             {
-                FillRoundedRect(g, bodyBrush, b.Left, b.Top, w, h, r);
+                // Body fill — ColorMatrix path works at every alpha (fast enough; temp bitmap is cached).
+                FillRoundedRectWithAlpha(g, b.Left, b.Top, w, h, r,
+                    _appearance.BodyOpacity, 20, 22, 28);
             }
             if (_appearance.HeaderOpacity > 3)
             {
-                FillHeaderPath(g, headerBrush, b.Left, b.Top, w, headerH, r);
+                FillHeaderWithAlpha(g, b.Left, b.Top, w, headerH, r,
+                    _appearance.HeaderOpacity, 40, 44, 54);
             }
 
             // Title: drawn with GDI TextRenderer (NOT GDI+ DrawString). TextRenderer performs
@@ -2123,15 +2133,95 @@ public sealed class FenceLayer
     /// <summary>Header fill: top corners rounded, bottom edge square (sits flush on the body).</summary>
     private static void FillHeaderPath(Graphics g, Brush brush, int x, int y, int w, int h, int r)
     {
+        using var path = HeaderPath(x, y, w, h, r);
+        g.FillPath(brush, path);
+    }
+
+    /// <summary>Header <see cref="GraphicsPath"/>: top corners rounded, bottom edge square.</summary>
+    private static GraphicsPath HeaderPath(int x, int y, int w, int h, int r)
+    {
         r = Math.Min(r, w / 2);
-        using var path = new GraphicsPath();
+        var path = new GraphicsPath();
         path.AddArc(x, y, r, r, 180, 90);
         path.AddArc(x + w - r, y, r, r, 270, 90);
         path.AddLine(x + w, y + r, x + w, y + h);
         path.AddLine(x + w, y + h, x, y + h);
         path.AddLine(x, y + h, x, y + r);
         path.CloseFigure();
-        g.FillPath(brush, path);
+        return path;
+    }
+
+    /// <summary>
+    /// Reliable low-alpha fill that bypasses GDI+'s buggy low-alpha <see cref="SolidBrush"/> on a
+    /// 32bpp-ARGB bitmap (which renders faint dark fills as pale gray/white). The shape is drawn at
+    /// FULL opacity onto a cached temp bitmap, then alpha-blended back onto <paramref name="g"/> with a
+    /// <see cref="ColorMatrix"/> that scales the whole image's alpha to <paramref name="alpha"/>/255.
+    /// ColorMatrix alpha scaling is reliable at every value, so the box fades to transparent correctly
+    /// instead of going white when the user lowers the opacity slider.
+    /// </summary>
+    private void FillRoundedRectWithAlpha(Graphics g, int x, int y, int w, int h, int r,
+        int alpha, byte cr, byte cg, byte cb)
+    {
+        if (alpha <= 3 || w <= 0 || h <= 0) return;
+        EnsureAlphaTmp(w, h);
+        using (var tg = Graphics.FromImage(_alphaFillTmp!))
+        {
+            tg.Clear(Color.FromArgb(0, 0, 0, 0));
+            tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = RoundedRectPath(0, 0, w, h, r);
+            using var solid = new SolidBrush(Color.FromArgb(255, cr, cg, cb));
+            tg.FillPath(solid, path);
+        }
+        DrawTmpWithAlpha(g, x, y, w, h, alpha);
+    }
+
+    /// <summary>Same reliable fill as <see cref="FillRoundedRectWithAlpha"/> but for the header shape
+    /// (rounded top, square bottom).</summary>
+    private void FillHeaderWithAlpha(Graphics g, int x, int y, int w, int h, int r,
+        int alpha, byte cr, byte cg, byte cb)
+    {
+        if (alpha <= 3 || w <= 0 || h <= 0) return;
+        EnsureAlphaTmp(w, h);
+        using (var tg = Graphics.FromImage(_alphaFillTmp!))
+        {
+            tg.Clear(Color.FromArgb(0, 0, 0, 0));
+            tg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = HeaderPath(0, 0, w, h, r);
+            using var solid = new SolidBrush(Color.FromArgb(255, cr, cg, cb));
+            tg.FillPath(solid, path);
+        }
+        DrawTmpWithAlpha(g, x, y, w, h, alpha);
+    }
+
+    /// <summary>Grow (or allocate) the shared temp bitmap so it is at least w×h.</summary>
+    private void EnsureAlphaTmp(int w, int h)
+    {
+        if (_alphaFillTmp != null && _alphaFillTmp.Width >= w && _alphaFillTmp.Height >= h) return;
+        int nw = Math.Max(_alphaFillTmp?.Width ?? 0, w);
+        int nh = Math.Max(_alphaFillTmp?.Height ?? 0, h);
+        _alphaFillTmp?.Dispose();
+        _alphaFillTmp = new Bitmap(nw, nh, PixelFormat.Format32bppArgb);
+    }
+
+    /// <summary>Alpha-blend the cached temp bitmap (its content) onto <paramref name="g"/> at
+    /// (x,y) with overall alpha = <paramref name="alpha"/>/255 via a <see cref="ColorMatrix"/>.</summary>
+    private void DrawTmpWithAlpha(Graphics g, int x, int y, int w, int h, int alpha)
+    {
+        var cm = new ColorMatrix(new float[][]
+        {
+            new float[] { 1, 0, 0, 0, 0 },
+            new float[] { 0, 1, 0, 0, 0 },
+            new float[] { 0, 0, 1, 0, 0 },
+            new float[] { 0, 0, 0, (float)alpha / 255f, 0 },
+            new float[] { 0, 0, 0, 0, 1 }
+        });
+        using var ia = new ImageAttributes();
+        ia.SetColorMatrix(cm, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+        g.DrawImage(_alphaFillTmp!,
+            new Rectangle(x, y, w, h),
+            0, 0, w, h,
+            GraphicsUnit.Pixel,
+            ia);
     }
 
     /// <summary>Resize + rebuild + re-region on display / DPI changes so boxes stay aligned and the

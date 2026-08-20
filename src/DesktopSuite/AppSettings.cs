@@ -78,11 +78,12 @@ public sealed class AppSettings
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json);
                 if (loaded != null)
                 {
-                    // Clamp fence appearance values to safe ranges — prevents invisible fences
-                    // when settings were saved with extreme slider positions from a buggy build.
+                    // Clamp fence appearance values to safe ranges — prevents INVALID values
+                    // (negative or >255) but DOES allow full transparency (0). The renderer handles
+                    // alpha=0 correctly (skips the fill), so a 0 here is a valid "fully transparent" choice.
                     loaded.FenceCornerRadius =   Math.Clamp(loaded.FenceCornerRadius,   0, 40);
-                    loaded.FenceBodyOpacity =    Math.Clamp(loaded.FenceBodyOpacity,    40, 255);   // min 40 → always faintly visible
-                    loaded.FenceHeaderOpacity =  Math.Clamp(loaded.FenceHeaderOpacity,  80, 255);   // min 80 → header always readable
+                    loaded.FenceBodyOpacity =    Math.Clamp(loaded.FenceBodyOpacity,    0, 255);    // 0 = fully transparent (allowed)
+                    loaded.FenceHeaderOpacity =  Math.Clamp(loaded.FenceHeaderOpacity,  0, 255);    // 0 = fully transparent (allowed)
                     loaded.FenceTitleFontSize =  Math.Clamp((int)loaded.FenceTitleFontSize, 8, 28);
                     loaded.FenceTitleAlign =     Math.Clamp(loaded.FenceTitleAlign,     0, 1);
                     loaded.FenceFrostOpacity =   Math.Clamp(loaded.FenceFrostOpacity,   0, 200);

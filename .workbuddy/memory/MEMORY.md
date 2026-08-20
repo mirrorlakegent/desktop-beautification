@@ -30,9 +30,13 @@
 
 ## M4 进展
 - **M4-A 布局导入/导出**：已交付（`67e857b`），托盘「📁 布局」子菜单 + FenceLayer.ApplyLayout。
-- **M4-B 外观定制**：代码完成·**待真机验证**。外观设置持久化在 `AppSettings`（7 属性），经
+- **M4-B 外观定制**：代码完成·**经 9 轮真机修复（v1→v9）**。外观设置持久化在 `AppSettings`（8 属性），经
   `FenceAppearance` DTO 映射到 `FenceLayer.SetAppearance`；圆角命中区用 `CreateRoundRectRgn` 对齐；
   毛玻璃（实验·默认关）用截屏+盒式模糊缓存。WinForms 弹窗 `FenceAppearanceForm` + 托盘「🎨 外观…」。
+  - **v9 关键修复**：settings.json 脏数据（BodyOpacity=0）导致围栏不可见；已在
+    `AppSettings.Load()` 和 `FenceLayer.SetAppearance()` 加 `Math.Clamp` 防御（体≥40, 头≥80）。
+  - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
+    Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 
 ## 部署与启动
 - **部署目标（canonical）= `D:\WorkBuddy\ds2\DesktopSuite.exe`**，自包含单文件发布：
