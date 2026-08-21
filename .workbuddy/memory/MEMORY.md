@@ -30,11 +30,17 @@
 
 ## M4 进展
 - **M4-A 布局导入/导出**：已交付（`67e857b`），托盘「📁 布局」子菜单 + FenceLayer.ApplyLayout。
-- **M4-B 外观定制**：代码完成·**经 9 轮真机修复（v1→v9）**。外观设置持久化在 `AppSettings`（8 属性），经
+- **M4-B 外观定制**：代码完成·**经 12 轮真机修复（v1→v12）**。外观设置持久化在 `AppSettings`（8 属性），经
   `FenceAppearance` DTO 映射到 `FenceLayer.SetAppearance`；圆角命中区用 `CreateRoundRectRgn` 对齐；
   毛玻璃（实验·默认关）用截屏+盒式模糊缓存。WinForms 弹窗 `FenceAppearanceForm` + 托盘「🎨 外观…」。
   - **v9 关键修复**：settings.json 脏数据（BodyOpacity=0）导致围栏不可见；已在
     `AppSettings.Load()` 和 `FenceLayer.SetAppearance()` 加 `Math.Clamp` 防御（体≥40, 头≥80）。
+  - **v10-v11**: 发现 GDI+ 低 alpha SolidBrush 在 Format32bppArgb 上渲染异常（暗色→白色）；
+    v11 改用 ColorMatrix 方案+移除 clamp 下限，但**仍失败**——GDI+ 其他绘图操作（文字抗锯齿等）
+    同样留下非零 RGB 像素。
+  - **v12 最终方案（42361bd）**：彻底绕过 GDI+ Alpha 合成——新增 `ApplyBodyAlpha(Bitmap)` 
+    在 DrawBoxes 后、PremultiplyAlpha 前 LockBits 逐像素缩放主体区域 Alpha；
+    DrawBoxes 主体改为全不透明(255)由后处理统一缩放；图标标签/图标同步淡出。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 

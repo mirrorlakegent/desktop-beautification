@@ -1447,14 +1447,20 @@ public sealed class FenceLayer
                     // "＋ 新建分类" tile from _boxRects.
                     EnsureFrostCapture();
                     DrawBoxes(g);
-
-                    // v12: Post-process body alpha at the pixel level. This completely bypasses GDI+'s
-                    // unreliable low-alpha compositing (which renders dark fills as white/pale gray).
-                    // We directly scale every pixel's alpha inside each box's body region by
-                    // BodyOpacity/255 — so item labels, icons, and any other content fade naturally
-                    // along with the body, and opacity=0 produces genuinely transparent pixels.
-                    ApplyBodyAlpha(bmp);
+                    // NOTE: ApplyBodyAlpha is called AFTER this using block closes (see below).
+                    // It MUST run after Graphics.Dispose() because GDI+ defers some rendering ops
+                    // (text anti-aliasing cleanup, internal cache flush) until disposal — if we
+                    // LockBits the bitmap while GDI+ still holds it, our pixel writes can be
+                    // overwritten by GDI+'s delayed flush, which is why v12 still showed white.
                 }
+            }
+
+            // v12: Post-process body alpha at the pixel level — OUTSIDE the Graphics using block.
+            // GDI+ must be fully disposed before we LockBits the bitmap; otherwise deferred rendering
+            // overwrites our alpha changes with the original white-ish pixels.
+            if (!_diagFullWindow)
+            {
+                ApplyBodyAlpha(bmp);
             }
 
             hdcScreen = NativeMethods.GetDC(IntPtr.Zero);
