@@ -1459,12 +1459,12 @@ public sealed class FenceLayer
                 }
             }
 
-            // v14: Post-GDI+ cleanup — force body-region pixels to near-transparent (alpha=1).
-            // GDI+ operations (text anti-aliasing, border drawing, etc.) leak non-zero RGB into
-            // the body area. Combined with GetHbitmap()'s alpha=0 → white bug, this causes the
-            // familiar "white fence" appearance. This cleanup runs AFTER Graphics.Dispose() so
-            // it's not racing with GDI+, and uses alpha=1 (not 0) to survive GetHbitmap().
-            ClearBodyPixels(bmp);
+            // NOTE: No post-GDI+ body cleanup needed. FillBodyPixels (before Graphics) writes the
+            // correct body alpha directly via LockBits. GDI+ operations (text, borders, icons)
+            // draw ON TOP of that background — their pixels are in the header/icon/label areas,
+            // not the body fill area. The v14 "ClearBodyPixels" approach was WRONG: it unconditionally
+            // overwrote ALL body-region pixels to (0,0,0,1), destroying the correct alpha value
+            // that FillBodyPixels had written — which is why v14 showed white at EVERY opacity level.
 
             hdcScreen = NativeMethods.GetDC(IntPtr.Zero);
             hdcMem = NativeMethods.CreateCompatibleDC(hdcScreen);
@@ -2105,97 +2105,6 @@ public sealed class FenceLayer
                                 ptr[offset + 1] = 28;        // G
                                 ptr[offset + 2] = 20;        // R
                                 ptr[offset + 3] = (byte)bodyA; // A = BodyOpacity
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        finally
-        {
-            bmp.UnlockBits(data);
-        }
-    }
-
-    /// <summary>
-    /// v14: Post-GDI+ body cleanup — force all body-region pixels to near-transparent.
-    /// GetHbitmap() does not preserve alpha=0 correctly (DWM renders them as white), so we use
-    /// alpha=1 (0.4% opacity — imperceptible but non-zero) as the "minimum visible alpha".
-    /// This also overwrites any pixels GDI+ leaked into the body area during DrawBoxes
-    /// (text anti-aliasing, border strokes, etc.).
-    /// </summary>
-    private void ClearBodyPixels(Bitmap bmp)
-    {
-        int rPx = (int)Math.Round(_appearance.CornerRadius * _dpiX);
-        int headerH = (int)Math.Round(HeaderHeight * _dpiY);
-
-        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
-        var data = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-        try
-        {
-            unsafe
-            {
-                byte* ptr = (byte*)data.Scan0;
-                int stride = data.Stride;
-
-                for (int bi = 0; bi < _boxRects.Count; bi++)
-                {
-                    var b = _boxRects[bi];
-                    int bx = b.Left, by = b.Top;
-                    int bw = b.Right - b.Left, bh = b.Bottom - b.Top;
-                    if (bw <= 0 || bh <= 0) continue;
-
-                    int r = Math.Min(rPx, Math.Min(bw, bh) / 2);
-
-                    // Body region: full box MINUS header strip
-                    int bodyTop = by + headerH;
-                    int bodyH = bh - headerH;
-                    if (bodyH <= 0) continue;
-
-                    int startX = Math.Max(bx, 0);
-                    int startY = Math.Max(bodyTop, 0);
-                    int endX = Math.Min(bx + bw, bmp.Width);
-                    int endY = Math.Min(bodyTop + bodyH, bmp.Height);
-
-                    for (int y = startY; y < endY; y++)
-                    {
-                        for (int x = startX; x < endX; x++)
-                        {
-                            bool inside;
-                            int relX = x - bx;
-                            int relY = y - by;
-
-                            if (relY >= bh - r && r > 0)
-                            {
-                                if (relX < r)
-                                {
-                                    double dx = relX - r;
-                                    double dy = relY - (bh - r);
-                                    inside = (dx * dx + dy * dy) <= (long)r * r;
-                                }
-                                else if (relX >= bw - r)
-                                {
-                                    double dx = relX - (bw - r);
-                                    double dy = relY - (bh - r);
-                                    inside = (dx * dx + dy * dy) <= (long)r * r;
-                                }
-                                else
-                                {
-                                    inside = true;
-                                }
-                            }
-                            else
-                            {
-                                inside = true;
-                            }
-
-                            if (inside)
-                            {
-                                int offset = y * stride + x * 4;
-                                ptr[offset]     = 0;  // B
-                                ptr[offset + 1] = 0;  // G
-                                ptr[offset + 2] = 0;  // R
-                                ptr[offset + 3] = 1;  // A = 1 (not 0! avoids GetHbitmap bug)
                             }
                         }
                     }

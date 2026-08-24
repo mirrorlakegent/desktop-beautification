@@ -30,17 +30,19 @@
 
 ## M4 进展
 - **M4-A 布局导入/导出**：已交付（`67e857b`），托盘「📁 布局」子菜单 + FenceLayer.ApplyLayout。
-- **M4-B 外观定制**：代码完成·**经 12 轮真机修复（v1→v12）**。外观设置持久化在 `AppSettings`（8 属性），经
+- **M4-B 外观定制**：代码完成·**经 14 轮真机修复（v1→v14）**。外观设置持久化在 `AppSettings`（8 属性），经
   `FenceAppearance` DTO 映射到 `FenceLayer.SetAppearance`；圆角命中区用 `CreateRoundRectRgn` 对齐；
   毛玻璃（实验·默认关）用截屏+盒式模糊缓存。WinForms 弹窗 `FenceAppearanceForm` + 托盘「🎨 外观…」。
   - **v9 关键修复**：settings.json 脏数据（BodyOpacity=0）导致围栏不可见；已在
     `AppSettings.Load()` 和 `FenceLayer.SetAppearance()` 加 `Math.Clamp` 防御（体≥40, 头≥80）。
-  - **v10-v11**: 发现 GDI+ 低 alpha SolidBrush 在 Format32bppArgb 上渲染异常（暗色→白色）；
-    v11 改用 ColorMatrix 方案+移除 clamp 下限，但**仍失败**——GDI+ 其他绘图操作（文字抗锯齿等）
-    同样留下非零 RGB 像素。
-  - **v12 最终方案（42361bd）**：彻底绕过 GDI+ Alpha 合成——新增 `ApplyBodyAlpha(Bitmap)` 
-    在 DrawBoxes 后、PremultiplyAlpha 前 LockBits 逐像素缩放主体区域 Alpha；
-    DrawBoxes 主体改为全不透明(255)由后处理统一缩放；图标标签/图标同步淡出。
+  - **v10-v13**: 发现 GDI+ 低 alpha SolidBrush 在 Format32bppArgb 上渲染异常（暗色→白色）；
+    v11 ColorMatrix/v12 ApplyBodyAlpha/v13 FillBodyPixels 均失败——根因不在 GDI+ 而在
+    **`.NET Bitmap.GetHbitmap()` 不保留 alpha=0**（转 DIB 时 BITMAPINFOHEADER 无 alpha 字段，
+    UpdateLayeredWindow 将 alpha=0 渲染为白色）。
+  - **v14 最终方案（66d9daf）**：**永远不用 alpha=0，改用 alpha=1**（0.4% 不透明度，
+    人眼不可见但非零，能绕过 GetHbitmap 缺陷）。FillBodyPixels 预填充写 alpha=1；
+    新增 ClearBodyPixels 在 Graphics.Dispose() 后 LockBits 清理主体区域为 (0,0,0,1)，
+    覆盖 GDI+ 泄漏；图标/文字不受影响（保留各自 alpha）。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 
