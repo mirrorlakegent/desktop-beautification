@@ -223,6 +223,11 @@ internal static class FenceNative
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
+    // PostMessage is thread-safe: used to marshal a frosted-backdrop refresh from the
+    // SystemEvents thread back onto the fence window's owner thread (where UpdateVisual runs).
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr WindowFromPoint(POINT point);
 

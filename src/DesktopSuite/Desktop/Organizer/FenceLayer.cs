@@ -347,6 +347,7 @@ public sealed class FenceLayer
             BuildBoxes();
             ApplyRegion();
             UpdateVisual();
+            if (_hwnd != IntPtr.Zero) HookSystemEvents();
         }
         catch (Exception ex)
         {
@@ -499,6 +500,10 @@ public sealed class FenceLayer
 
     // ---- Win32 window procedure ----
 
+    // Internal message (WM_APP range) posted from the SystemEvents pool thread to ask the
+    // window's owner thread to drop the cached frosted backdrop and re-capture the wallpaper.
+    private const uint WM_FROST_REFRESH = 0x8001;
+
     private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         const uint WM_PAINT = 0x000F;
@@ -534,6 +539,11 @@ public sealed class FenceLayer
             case WM_DISPLAYCHANGE:
             case WM_DPICHANGED:
                 OnDisplayOrDpiChange();
+                return IntPtr.Zero;
+            case WM_FROST_REFRESH:
+                // Posted from OnUserPrefChanged (SystemEvents pool thread) when the wallpaper
+                // changes while Frosted is ON. Runs on the window's owner thread.
+                if (_appearance.Frosted) { InvalidateFrost(); UpdateVisual(); }
                 return IntPtr.Zero;
             case WM_DESTROY:
                 // Teardown is driven by Close(); do not unregister the class here.
@@ -602,6 +612,34 @@ public sealed class FenceLayer
             default:
                 return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
         }
+    }
+
+    // ---- M4-B frosted: wallpaper-change refresh (SystemEvents → owner thread) ----
+    private bool _sysEventsHooked;
+
+    private void HookSystemEvents()
+    {
+        if (_sysEventsHooked) return;
+        try { Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPrefChanged; _sysEventsHooked = true; }
+        catch { /* SystemEvents may be unavailable in some sessions; frosted just won't auto-refresh */ }
+    }
+
+    private void UnhookSystemEvents()
+    {
+        if (!_sysEventsHooked) return;
+        try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPrefChanged; }
+        catch { /* ignore */ }
+        _sysEventsHooked = false;
+    }
+
+    private void OnUserPrefChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        // SystemEvents.UserPreferenceChanged fires on a thread-pool thread and is delivered even when
+        // our window is a WorkerW child (unlike WM_SETTINGCHANGE, which only reaches top-level windows).
+        // We only POST a refresh; the actual InvalidateFrost+UpdateVisual runs on the window owner
+        // thread via WM_FROST_REFRESH, where GDI+/UpdateLayeredWindow are safe to touch.
+        if (e.Category == Microsoft.Win32.UserPreferenceCategory.Desktop && _hwnd != IntPtr.Zero && _appearance.Frosted)
+            FenceNative.PostMessage(_hwnd, WM_FROST_REFRESH, IntPtr.Zero, IntPtr.Zero);
     }
 
     /// <summary>Render the fence surface into an off-screen 32bppARGB bitmap and push it to the
@@ -2488,6 +2526,7 @@ public sealed class FenceLayer
                 _className = null;
             }
             InvalidateFrost(); // release the cached frosted backdrop bitmap
+            UnhookSystemEvents(); // detach SystemEvents so we don't leak this FenceLayer
         }
         catch (Exception ex)
         {

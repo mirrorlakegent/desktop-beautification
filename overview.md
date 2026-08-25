@@ -59,3 +59,34 @@ v17 改的是整条位图 alpha 通路，故对所有依赖低 alpha 的外观�
 2. **HeaderOpacity=0 / 10 / 30** → 标题栏应随值淡出/淡入为暗色，**不变白**。
 3. 毛玻璃开关（默认关）随手测一下能否开启、是否花屏（详见下一步 ②）。
 4. 一般视觉：图标/文字/标题清晰，圆角对齐无错位。
+
+---
+
+## 毛玻璃深度验证 + v19（壁纸更换时毛玻璃自动刷新）
+
+### 实现审计结论（代码级）
+- 捕获：`EnsureFrostCapture` 用 `Graphics.CopyFromScreen(wr.Left,wr.Top,...)` 截取整屏合成图
+  （壁纸+图标，不含自身透明框，无自捕获反馈），3× box blur 缓存为 `_frostBmp`，逐盒裁剪后
+  与屏后壁纸正确对齐。
+- 窗口 (0,0) 静态全屏 → 盒子拖拽/移动时毛玻璃仍正确（全窗口缓存按盒取位）。
+- **多屏/分辨率**：`WM_DISPLAYCHANGE` 已处理（失效缓存）→ 已覆盖。
+- **真实 bug：壁纸更换未处理**。`_frostBmp` 只在 DPI/尺寸/CornerRadius/Frosted 失效。
+  `WM_SETTINGCHANGE` 仅广播给**顶层窗口**，而主路径是 WorkerW 子窗口 → 收不到。
+  故 Frosted 开启时换壁纸 → 模糊层陈旧（尤其本项目的 `StaticWallpaper` 改壁纸时）。
+
+### v19 修复
+- `FenceNative.cs`：新增 `PostMessage` P/Invoke。
+- `FenceLayer.cs`：订阅 `SystemEvents.UserPreferenceChanged`（有独立顶层消息窗口、跨父窗口、
+  收得到广播）；`UserPreferenceCategory.Desktop` 时 `PostMessage(WM_FROST_REFRESH)` 回到本窗口
+  线程，在 WndProc 同线程 `InvalidateFrost()`+`UpdateVisual()` 重捕壁纸。
+  `Close()` 注销订阅防泄漏。
+- 已发布 ds2（exe Aug 25 23:16），0 错误。
+
+### 深度验证测试矩阵（待用户真机复验）
+1. **Frosted 开启 + 换壁纸（含幻灯片切换）** → 模糊层应刷新为新壁纸（v19 修复点）。
+2. **FrostOpacity = 0** → 纯模糊无暗色染色；**= 200** → 重暗染色。
+3. **Frosted 开启时拖拽盒子** → 盒下毛玻璃正确跟随（静态缓存按盒取位）。
+4. **多屏**：主/副屏盒子毛玻璃是否对齐（WM_DISPLAYCHANGE 已处理）。
+5. **DPI 切换 / 分辨率变化** → 毛玻璃重新捕获无花屏。
+6. **性能**：开启毛玻璃瞬间的卡顿是否可接受（全窗口 3×blur 一次性）。
+7. 关闭毛玻璃 → 回落普通半透明无残留。
