@@ -44,11 +44,15 @@
     `FillBodyPixels`(LockBits 预填充，alpha=0 时写 alpha=1 绕过 GetHbitmap 缺陷)
     → GDI+ 绘制标题/边框/图标/文字 → PremultiplyAlpha → DWM。
     **关键教训：后处理清理不得无条件覆盖前置步骤已写入的正确数据**。
-  - **v16（妥协方案，待真机复验）**：用户复验 v15 透明度=0 仍全白 → 最小 alpha 1→20
-    （`if (bodyA<20) bodyA=20`，约 8% 不透明度），并 `borderA<10` 跳过边框绘制。
-    发布 ds2（exe Aug 25 09:50）。**v16 是绕过非根治**：真正根因是 `FenceLayer.cs:1479`
-    `bmp.GetHbitmap()` 参数less 重载不保留 alpha 通道，破坏整条低 alpha 管线。
-    **根治 = 用 `CreateDIBSection` + 拷贝 premultiplied scan0 替代 `GetHbitmap()`**，待用户确认是否做。
+  - **v16（妥协方案）**：用户复验 v15 透明度=0 仍全白 → 最小 alpha 1→20 + `borderA<10` 跳过边框。
+    发布 ds2（exe Aug 25 09:50），仅绕过非根治。
+  - **v17（根治，待真机复验）**：用户确认直接做根治。根因 = `FenceLayer.cs:UpdateVisual` 的
+    `bmp.GetHbitmap()` 参数less 重载不保留 alpha 通道（合成到背景、丢 alpha）→ 极低 alpha 渲染白。
+    改动：`NativeMethods` 新增 `CreateDIBSection`+40字节`BITMAPINFO`；`FenceLayer` 新增
+    `CreateAlphaDib`/`CopyPremultipliedToDib` 两个 static helper，用 CreateDIBSection + 拷贝
+    premultiplied scan0 替代 GetHbitmap（精确保留 alpha）；`FillBodyPixels` 去掉最小 alpha=20 限制
+    （允许真 0 → `(0,0,0,0)` 真透明）；边框跳过保留（防 GDI+ 低 alpha 画笔垃圾）。
+    发布 ds2（exe Aug 25 10:19）。**预期：滑块=0 主体真正透出壁纸**。若复验通过则 M4-B 透明度彻底结案。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 

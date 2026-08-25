@@ -1472,12 +1472,20 @@ public sealed class FenceLayer
 
             // UpdateLayeredWindow with AC_SRC_ALPHA expects the source bitmap in PREMULTIPLIED
             // alpha (PARGB). GDI+ stores straight alpha in Format32bppArgb, so we premultiply the
-            // pixel bytes before handing the bitmap to GetHbitmap — otherwise DWM double-premultiplies
+            // pixel bytes before handing them to CreateDIBSection — otherwise DWM double-premultiplies
             // and icon edges (fine alpha) render dark/invisible against the box background.
+            //
+            // v17 ROOT-CAUSE FIX: the layered source is built with CreateDIBSection and the
+            // premultiplied scan0 is copied directly, preserving the per-pixel alpha channel. The
+            // previous Bitmap.GetHbitmap() (parameterless) discarded alpha (it composites onto a
+            // background), which is exactly why every low-opacity pixel rendered white across
+            // v9..v16. With the alpha byte preserved, BodyOpacity=0 now produces a truly
+            // transparent body (wallpaper shows through) instead of white.
             PremultiplyAlpha(bmp);
 
-            hBmp = bmp.GetHbitmap();
+            hBmp = CreateAlphaDib(hdcMem, bmp, out IntPtr ppvBits);
             if (hBmp == IntPtr.Zero) return;
+            CopyPremultipliedToDib(bmp, ppvBits);
             hBmpOld = NativeMethods.SelectObject(hdcMem, hBmp);
 
             // Screen position of this window (a child of the desktop host). Use the real window rect
@@ -1708,9 +1716,12 @@ public sealed class FenceLayer
             }
             else
             {
-                // v16: Skip border draw when border alpha is very low — GDI+ Pen with alpha<~10
-                // triggers the same low-alpha white/garbage bug as SolidBrush. At BodyOpacity=0
-                // (mapped to 20 by FillBodyPixels), borderA = min(160, 20*160/180) = 18 — safe.
+                // v17: Skip border draw when border alpha is very low. GDI+ Pen with alpha < ~10
+                // composites as white/garbage onto the bitmap — the same GDI+ low-alpha defect that
+                // v13's LockBits body-fill sidestepped. At BodyOpacity=0, borderA = 0 → skipped;
+                // at small non-zero values it avoids the garbage. CreateDIBSection preserves the
+                // alpha channel exactly, but the pen garbage is introduced by GDI+ itself, so this
+                // guard must stay.
                 if (borderA >= 10)
                 {
                     g.DrawPath(borderPen, borderPath);
@@ -2025,6 +2036,77 @@ public sealed class FenceLayer
     }
 
     /// <summary>
+    /// v17 ROOT-CAUSE FIX for the v9..v16 "low-opacity renders white" bug.
+    /// Allocates a 32bpp DIB via CreateDIBSection (top-down: biHeight = -h, matching GDI+'s
+    /// top-down scan0) and returns the HBITMAP plus a pointer to its pixel buffer. Unlike
+    /// Bitmap.GetHbitmap() (parameterless), CreateDIBSection does NOT composite onto a background
+    /// and does NOT discard the alpha channel — so the alpha byte we write survives intact into
+    /// UpdateLayeredWindow, making alpha=0 genuinely transparent.
+    /// </summary>
+    private static IntPtr CreateAlphaDib(IntPtr hdc, Bitmap src, out IntPtr ppvBits)
+    {
+        var info = new NativeMethods.BITMAPINFO
+        {
+            biSize = Marshal.SizeOf<NativeMethods.BITMAPINFO>(),
+            biWidth = src.Width,
+            biHeight = -src.Height,   // negative => top-down DIB, matches GDI+ scan0 order
+            biPlanes = 1,
+            biBitCount = 32,
+            biCompression = 0,        // BI_RGB
+            biSizeImage = 0,
+            biXPelsPerMeter = 0,
+            biYPelsPerMeter = 0,
+            biClrUsed = 0,
+            biClrImportant = 0
+        };
+        ppvBits = IntPtr.Zero;
+        return NativeMethods.CreateDIBSection(hdc, ref info, 0 /*DIB_RGB_COLORS*/, out ppvBits, IntPtr.Zero, 0);
+    }
+
+    /// <summary>
+    /// Copies the (already premultiplied) ARGB bytes from <paramref name="src"/> into the DIB
+    /// pixel buffer at <paramref name="ppvBits"/>. The source is LockBits-read (read-only) and
+    /// unlocked immediately; the DIB retains the pixels because its memory is owned by the
+    /// HBITMAP returned by CreateAlphaDib. Row-by-row copy handles any stride mismatch safely.
+    /// </summary>
+    private static void CopyPremultipliedToDib(Bitmap src, IntPtr ppvBits)
+    {
+        if (ppvBits == IntPtr.Zero) return;
+        int w = src.Width, h = src.Height;
+        var rect = new Rectangle(0, 0, w, h);
+        var data = src.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            int srcStride = data.Stride;
+            int dstStride = w * 4; // 32bpp, DWORD-aligned
+            unsafe
+            {
+                byte* src0 = (byte*)data.Scan0;
+                byte* dst0 = (byte*)ppvBits;
+                if (srcStride == dstStride)
+                {
+                    Buffer.MemoryCopy(src0, dst0, (ulong)(dstStride * h), (ulong)(srcStride * h));
+                }
+                else
+                {
+                    for (int y = 0; y < h; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            src0 + (long)y * srcStride,
+                            dst0 + (long)y * dstStride,
+                            (ulong)dstStride,
+                            (ulong)dstStride);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            src.UnlockBits(data);
+        }
+    }
+
+    /// <summary>
     /// v13: Fill body background pixels directly via LockBits — BEFORE GDI+ touches the bitmap.
     /// This completely bypasses GDI+'s unreliable low-alpha SolidBrush compositing (which renders
     /// dark fills as white/pale gray when alpha &lt; ~60 on Format32bppArgb bitmaps).
@@ -2036,14 +2118,11 @@ public sealed class FenceLayer
     private void FillBodyPixels(Bitmap bmp)
     {
         int bodyA = _appearance.BodyOpacity;
-        // v16: Raise minimum alpha significantly. Alpha values below ~10-15 are unreliable
-        // through the entire rendering pipeline (GDI+ GetHbitmap → DIB → UpdateLayeredWindow → DWM):
-        //   - GDI+ SolidBrush/Pen with alpha<~10 renders as white/garbage on 32bppARGB
-        //   - GetHbitmap() may not preserve single-digit alpha in DIB format
-        //   - DWM can render very-low-alpha pixels as opaque white
-        // Alpha=20 (≈8% opacity) is visually nearly invisible but safely above all known
-        // failure thresholds. Users dragging to 0 get alpha=20 — a faint dark tint instead of white.
-        if (bodyA < 20) bodyA = 20;
+        // v17: NO minimum-alpha clamp. The v9..v16 "white-at-low-opacity" bug was caused by
+        // Bitmap.GetHbitmap() discarding the alpha channel — NOT by the alpha value itself.
+        // v17 replaces GetHbitmap() with CreateDIBSection, which preserves the alpha byte exactly,
+        // so BodyOpacity=0 now yields a truly transparent body (wallpaper shows through) rather
+        // than white. A clamp here would merely reintroduce a faint tint and defeat the root fix.
 
         int rPx = (int)Math.Round(_appearance.CornerRadius * _dpiX);
         int headerH = (int)Math.Round(HeaderHeight * _dpiY);

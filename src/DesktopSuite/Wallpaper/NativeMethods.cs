@@ -312,6 +312,37 @@ internal static class NativeMethods
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
 
+    /// <summary>Allocates a device-independent bitmap (DIB) whose pixel bits the caller fills directly
+    /// via <paramref name="ppvBits"/>. Unlike <see cref="System.Drawing.Bitmap.GetHbitmap"/> (parameterless),
+    /// this preserves the 32bpp ARGB alpha channel byte-for-byte — required for correct per-pixel-alpha
+    /// layered windows. A negative <c>biHeight</c> yields a top-down DIB matching GDI+'s top-down scan0.</summary>
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern IntPtr CreateDIBSection(
+        IntPtr hdc,
+        ref BITMAPINFO pbmi,
+        uint iUsage,
+        out IntPtr ppvBits,
+        IntPtr hSection,
+        uint dwOffset);
+
+    /// <summary>BITMAPINFO header only (no colour table). For a 32bpp BI_RGB DIB the colour table is
+    /// unused (biClrUsed = 0), so the 40-byte header alone is sufficient for CreateDIBSection.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFO
+    {
+        public int biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public int biCompression;
+        public int biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public int biClrUsed;
+        public int biClrImportant;
+    }
+
     [DllImport("gdi32.dll", SetLastError = true)]
     public static extern bool DeleteDC(IntPtr hdc);
 

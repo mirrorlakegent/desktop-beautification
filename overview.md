@@ -1,38 +1,33 @@
-# M4-B 透明度修复 v16 概述
+# M4-B 透明度修复 v17（根治）概述
 
-## 问题演进
-- **v14（66d9daf）**：`ClearBodyPixels()` 在 `FillBodyPixels` 正确写入主体像素（alpha=BodyOpacity）之后，
-  无条件覆盖所有主体区域为 `(0,0,0,1)`，抹掉正确 alpha → 无论滑块多少都全白。设计错误，已删。
-- **v15（dbcb8e5）**：删除 `ClearBodyPixels`，恢复 v13 管线（FillBodyPixels LockBits 预填充 → GDI+ 绘制
-  内容 → PremultiplyAlpha → GetHbitmap → DWM），alpha=0 时写 alpha=1 绕过 GetHbitmap 缺陷。
-  用户复验：**透明度=0 仍全白** → 说明 alpha=1 仍不够。
+## 真正的根因（v9→v16 七轮变白的源头）
+`FenceLayer.cs:UpdateVisual` 用 `bmp.GetHbitmap()`（参数less 重载）把 32bppARGB 位图转成
+GDI 位图交给 `UpdateLayeredWindow`。`GetHbitmap()` 会把位图**合成到默认背景色、丢弃 alpha 通道**，
+导致 `FillBodyPixels` / `PremultiplyAlpha` 写入的低 alpha 像素在 DWM 中渲染为白色。
+v16 的"最小 alpha=20"只是绕过，未实现"滑块=0 透出壁纸"。
 
-## v16 改动（本次提交）
-两处修改，均已编译 0 错误并发布到 `D:\WorkBuddy\ds2`：
+## v17 根治改动
+1. **`NativeMethods.cs`**：新增 `CreateDIBSection` P/Invoke 与 40 字节 `BITMAPINFO` 结构体（32bpp BI_RGB）。
+2. **`FenceLayer.cs` 新增两个 static helper**：
+   - `CreateAlphaDib(hdc, src, out ppvBits)`：`CreateDIBSection` 建顶向下 DIB（`biHeight=-h`，
+     与 GDI+ 顶向下 scan0 对齐），返回 HBITMAP 与像素指针。**精确保留 alpha 通道**。
+   - `CopyPremultipliedToDib(src, ppvBits)`：LockBits 读 premultiplied scan0，逐行拷贝到 DIB 像素缓冲
+     （处理 stride 差），随后 UnlockBits；像素由 HBITMAP 拥有。
+3. **`UpdateVisual`**：用 `CreateAlphaDib` + `CopyPremultipliedToDib` 替换 `bmp.GetHbitmap()`。
+   `PremultiplyAlpha`（alpha=0 时 RGB 清零）保留 → alpha=0 像素 = `(0,0,0,0)` → DWM 真透明。
+4. **`FillBodyPixels`**：移除"最小 alpha=20"限制，`bodyA = BodyOpacity` 原值——允许真 0。
+5. **边框跳过**（borderA<10）：保留——它防的是 GDI+ 低 alpha 画笔把垃圾 RGB 写进位图
+   （与 GetHbitmap 无关的 GDI+ 自身缺陷，CreateDIBSection 无法消除）。
 
-1. **`FillBodyPixels`：最小 alpha 1 → 20**
-   `if (bodyA < 20) bodyA = 20;` （约 8% 不透明度）
-   理由：alpha < ~10 在整条管线都不可靠——
-   GDI+ 低 alpha `SolidBrush/Pen` 在 Format32bppArgb 上渲染为白/garbage；
-   `GetHbitmap()` 不保真单数字 alpha；DWM 可把极低 alpha 像素渲染为白。
-   alpha=20 人眼近乎不可见，但高于所有已知缺陷阈值。
+## 行为变更
+- **滑块=0 → 主体背景真正透明，透出壁纸**（不再白、不再淡灰）。
+- 标题/图标/文字各有独立 alpha，不随主体透明度消失（符合"主体透明度"独立滑块设计）。
+- header 用独立 `HeaderOpacity`，亦不受影响。
 
-2. **`DrawBoxes` 边框绘制**：`borderA < 10` 时跳过 `g.DrawPath(borderPen, borderPath)`，
-   避免 alpha≈0 画笔触发与 SolidBrush 同源的 GDI+ 低 alpha 白色缺陷。
-
-## 仍存的真正根因（v16 未根治）
-`FenceLayer.cs` 第 1479 行 `bmp.GetHbitmap()`（参数less 重载）会把 32bppARGB 合成到默认背景、
-**不保留 alpha 通道**。这才是 v9→v15 七轮"极低 alpha 变白"的源头——
-`FillBodyPixels` / `PremultiplyAlpha` 写入的 alpha 在 `GetHbitmap` 这一步被破坏。
-v16 的"最小 alpha=20"只是**绕过**（让合成结果偏暗而非白），**并未实现"滑块=0 完全透出壁纸"**。
-
-**根治方案**：用 `CreateDIBSection` + 直接拷贝 premultiplied `scan0` 字节替代 `GetHbitmap()`，
-精确保留 alpha 通道 → alpha=0 时 DWM 渲染为真透明。这是下一步要做的事。
-
-## 验证要点（待用户真机复验）
+## 待用户真机复验
 重启 `D:\WorkBuddy\ds2\DesktopSuite.exe` 后：
-1. 透明度=0 → 应为**极淡暗色微染**（非纯透明，也非全白）——这是 v16 妥协结果
-2. 透明度中段 → 正常半透明响应
+1. 透明度=0 → 主体区域应**完全透出壁纸**（鼠标可点穿到桌面图标）
+2. 透明度中段 → 正常半透明暗色
 3. 透明度=255 → 全不透明暗色
-4. 图标/文字不被主体透明度压暗
-若用户要求"0=真透出壁纸"，再实施 `CreateDIBSection` 根治。
+4. 图标/文字/标题清晰、不被压暗
+若复验通过，M4-B 透明度问题彻底结案（首个真机验证通过的根因修复）。
