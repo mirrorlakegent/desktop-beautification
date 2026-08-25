@@ -1645,22 +1645,35 @@ public sealed class FenceLayer
             //
             int headerH = Math.Min(hh, h);
             if (_appearance.Frosted && _frostBmp != null)
-            {
-                // Frosted mode: draw blurred desktop backdrop clipped to box, then tint.
-                using var boxPath = RoundedRectPath(b.Left, b.Top, w, h, r);
-                using (var clip = new Region(boxPath))
                 {
-                    g.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Replace);
-                    g.DrawImage(_frostBmp, 0, 0);
-                    g.ResetClip();
+                    // Frosted mode: draw blurred desktop backdrop clipped to box, then tint.
+                    using var boxPath = RoundedRectPath(b.Left, b.Top, w, h, r);
+                    using (var clip = new Region(boxPath))
+                    {
+                        g.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Replace);
+                        g.DrawImage(_frostBmp, 0, 0);
+                        g.ResetClip();
+                    }
+                    // Apply a minimum frost tint so the blurred backdrop never renders as pure white
+                    // on bright wallpapers. _frostBmp is alpha=255 (opaque) from BoxBlur; without enough
+                    // tint the result looks like a washed-out white haze. Minimum ~20 (≈8%) keeps the
+                    // frosted look clearly visible at all slider positions.
+                    int frostA = Math.Max(_appearance.FrostOpacity, 20);
+                    if (frostA > 3)
+                    {
+                        FillRoundedRectWithAlpha(g, b.Left, b.Top, w, h, r,
+                            frostA, 16, 18, 24);
+                    }
                 }
-                if (_appearance.FrostOpacity > 3)
+                else if (_appearance.Frosted)
                 {
+                    // Frosted is ON but backdrop capture failed (_frostBmp is null). Fall back to
+                    // normal semi-transparent body so the box doesn't render as undefined/white.
+                    int bodyA = _appearance.BodyOpacity;
                     FillRoundedRectWithAlpha(g, b.Left, b.Top, w, h, r,
-                        _appearance.FrostOpacity, 16, 18, 24);
+                        bodyA, 20, 22, 28);
                 }
-            }
-            // NOTE: No else-branch for body fill here — body is handled by FillBodyPixels.
+                // NOTE: Non-frosted body fill is handled by FillBodyPixels (LockBits before Graphics).
             if (_appearance.HeaderOpacity > 3)
             {
                 FillHeaderWithAlpha(g, b.Left, b.Top, w, headerH, r,
