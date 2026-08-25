@@ -1708,7 +1708,13 @@ public sealed class FenceLayer
             }
             else
             {
-                g.DrawPath(borderPen, borderPath);
+                // v16: Skip border draw when border alpha is very low — GDI+ Pen with alpha<~10
+                // triggers the same low-alpha white/garbage bug as SolidBrush. At BodyOpacity=0
+                // (mapped to 20 by FillBodyPixels), borderA = min(160, 20*160/180) = 18 — safe.
+                if (borderA >= 10)
+                {
+                    g.DrawPath(borderPen, borderPath);
+                }
             }
         }
 
@@ -2030,10 +2036,14 @@ public sealed class FenceLayer
     private void FillBodyPixels(Bitmap bmp)
     {
         int bodyA = _appearance.BodyOpacity;
-        // v14: GetHbitmap() does NOT preserve alpha=0 correctly — DWM renders alpha=0 pixels
-        // as white/opaque. Fix: use alpha=1 (0.4% opacity, imperceptible but non-zero) instead
-        // of true zero. This is the "minimum visible alpha" that survives GetHbitmap → DWM.
-        if (bodyA <= 0) bodyA = 1;
+        // v16: Raise minimum alpha significantly. Alpha values below ~10-15 are unreliable
+        // through the entire rendering pipeline (GDI+ GetHbitmap → DIB → UpdateLayeredWindow → DWM):
+        //   - GDI+ SolidBrush/Pen with alpha<~10 renders as white/garbage on 32bppARGB
+        //   - GetHbitmap() may not preserve single-digit alpha in DIB format
+        //   - DWM can render very-low-alpha pixels as opaque white
+        // Alpha=20 (≈8% opacity) is visually nearly invisible but safely above all known
+        // failure thresholds. Users dragging to 0 get alpha=20 — a faint dark tint instead of white.
+        if (bodyA < 20) bodyA = 20;
 
         int rPx = (int)Math.Round(_appearance.CornerRadius * _dpiX);
         int headerH = (int)Math.Round(HeaderHeight * _dpiY);

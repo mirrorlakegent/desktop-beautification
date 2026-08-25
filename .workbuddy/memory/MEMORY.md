@@ -30,19 +30,25 @@
 
 ## M4 进展
 - **M4-A 布局导入/导出**：已交付（`67e857b`），托盘「📁 布局」子菜单 + FenceLayer.ApplyLayout。
-- **M4-B 外观定制**：代码完成·**经 14 轮真机修复（v1→v14）**。外观设置持久化在 `AppSettings`（8 属性），经
+- **M4-B 外观定制**：代码完成·**经 15 轮真机修复（v1→v15）**。外观设置持久化在 `AppSettings`（8 属性），经
   `FenceAppearance` DTO 映射到 `FenceLayer.SetAppearance`；圆角命中区用 `CreateRoundRectRgn` 对齐；
   毛玻璃（实验·默认关）用截屏+盒式模糊缓存。WinForms 弹窗 `FenceAppearanceForm` + 托盘「🎨 外观…」。
   - **v9 关键修复**：settings.json 脏数据（BodyOpacity=0）导致围栏不可见；已在
-    `AppSettings.Load()` 和 `FenceLayer.SetAppearance()` 加 `Math.Clamp` 防御（体≥40, 头≥80）。
+    `AppSettings.Load()` 和 `FenceLayer.SetAppearance()` 加 `Math.Clamp` 防御（后于 v11 移除下限）。
   - **v10-v13**: 发现 GDI+ 低 alpha SolidBrush 在 Format32bppArgb 上渲染异常（暗色→白色）；
-    v11 ColorMatrix/v12 ApplyBodyAlpha/v13 FillBodyPixels 均失败——根因不在 GDI+ 而在
-    **`.NET Bitmap.GetHbitmap()` 不保留 alpha=0**（转 DIB 时 BITMAPINFOHEADER 无 alpha 字段，
-    UpdateLayeredWindow 将 alpha=0 渲染为白色）。
-  - **v14 最终方案（66d9daf）**：**永远不用 alpha=0，改用 alpha=1**（0.4% 不透明度，
-    人眼不可见但非零，能绕过 GetHbitmap 缺陷）。FillBodyPixels 预填充写 alpha=1；
-    新增 ClearBodyPixels 在 Graphics.Dispose() 后 LockBits 清理主体区域为 (0,0,0,1)，
-    覆盖 GDI+ 泄漏；图标/文字不受影响（保留各自 alpha）。
+    v11 ColorMatrix/v12 ApplyBodyAlpha 后处理均失败——v12b 移到 Graphics 块外仍失败；
+    **v13 FillBodyPixels（LockBits 预填充，GDI+ 前写入像素）有改善但低透明度仍有浅白残留**。
+  - **v14 失败（66d9daf）**：新增 ClearBodyPixels 在 Graphics.Dispose() 后**无条件覆盖所有主体像素为 (0,0,0,1)**
+    ——抹掉了 FillBodyPixels 写入的正确 alpha，导致**无论滑块多少都全白**。设计错误，已删除。
+  - **v15 最终方案（dbcb8e5）**：删除 ClearBodyPixels，恢复 v13 正确管线：
+    `FillBodyPixels`(LockBits 预填充，alpha=0 时写 alpha=1 绕过 GetHbitmap 缺陷)
+    → GDI+ 绘制标题/边框/图标/文字 → PremultiplyAlpha → DWM。
+    **关键教训：后处理清理不得无条件覆盖前置步骤已写入的正确数据**。
+  - **v16（妥协方案，待真机复验）**：用户复验 v15 透明度=0 仍全白 → 最小 alpha 1→20
+    （`if (bodyA<20) bodyA=20`，约 8% 不透明度），并 `borderA<10` 跳过边框绘制。
+    发布 ds2（exe Aug 25 09:50）。**v16 是绕过非根治**：真正根因是 `FenceLayer.cs:1479`
+    `bmp.GetHbitmap()` 参数less 重载不保留 alpha 通道，破坏整条低 alpha 管线。
+    **根治 = 用 `CreateDIBSection` + 拷贝 premultiplied scan0 替代 `GetHbitmap()`**，待用户确认是否做。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 
