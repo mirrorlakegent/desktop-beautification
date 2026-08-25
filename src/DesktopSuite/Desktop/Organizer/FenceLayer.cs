@@ -1654,15 +1654,12 @@ public sealed class FenceLayer
                         g.DrawImage(_frostBmp, 0, 0);
                         g.ResetClip();
                     }
-                    // Apply a minimum frost tint so the blurred backdrop never renders as pure white
-                    // on bright wallpapers. _frostBmp is alpha=255 (opaque) from BoxBlur; without enough
-                    // tint the result looks like a washed-out white haze. Minimum ~20 (≈8%) keeps the
-                    // frosted look clearly visible at all slider positions.
-                    int frostA = Math.Max(_appearance.FrostOpacity, 20);
-                    if (frostA > 3)
+                    // Apply dark tint over the blurred backdrop. Uses FillRoundedRectWithAlpha
+                    // (opaque brush + ColorMatrix alpha scale) — safe from GDI+ low-alpha defects.
+                    if (_appearance.FrostOpacity > 3)
                     {
                         FillRoundedRectWithAlpha(g, b.Left, b.Top, w, h, r,
-                            frostA, 16, 18, 24);
+                            _appearance.FrostOpacity, 16, 18, 24);
                     }
                 }
                 else if (_appearance.Frosted)
@@ -2311,15 +2308,32 @@ public sealed class FenceLayer
         if (_hwnd == IntPtr.Zero || _winW <= 0 || _winH <= 0) return;
         try
         {
+            // ---- Avoid self-capture feedback loop ----
+            // CopyFromScreen captures the composited screen OUTPUT — which includes our own
+            // layered window's previous frame. If we captured that, the frost backdrop would
+            // contain a blurred copy of our own frosted rendering, creating a feedback loop:
+            //   low FrostOpacity → previous frame is bright → capture is bright → next frame
+            //   stays white forever (v21 bug: white/washed-out at low opacity, flat-dark at
+            //   high opacity, inconsistent per-box content in same _frostBmp).
+            //
+            // Fix: temporarily hide (SW_HIDE) so CopyFromScreen captures the REAL desktop
+            // (wallpaper + icons) behind us. SW_HIDE is safe for our layered window type
+            // (HideFences/ShowFences already uses it). Window is invisible for ~50ms — this
+            // only runs once per frost session, not per-frame.
+            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
+            System.Threading.Thread.Sleep(50); // let DWM compose the hide
+
             NativeMethods.GetWindowRect(_hwnd, out var wr);
             using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
             using (var gc = Graphics.FromImage(raw))
             {
-                // CopyFromScreen grabs the final composited screen (wallpaper + icons) at our window's
-                // screen position. This does NOT include our own (transparent) layered frame, so there
-                // is no self-capture feedback.
+                // Window is now invisible — this captures the actual desktop wallpaper + icons.
                 gc.CopyFromScreen(wr.Left, wr.Top, 0, 0, new Size(_winW, _winH));
             }
+
+            // Re-show (UpdateVisual will push a real frame making it visible again;
+            // this just ensures the handle isn't left hidden if we error out below).
+            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_SHOW);
             int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
             var blurred = BoxBlur(raw, radius);
             // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)

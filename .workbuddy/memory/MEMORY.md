@@ -46,13 +46,23 @@
     **关键教训：后处理清理不得无条件覆盖前置步骤已写入的正确数据**。
   - **v16（妥协方案）**：用户复验 v15 透明度=0 仍全白 → 最小 alpha 1→20 + `borderA<10` 跳过边框。
     发布 ds2（exe Aug 25 09:50），仅绕过非根治。
-  - **v17（根治，待真机复验）**：用户确认直接做根治。根因 = `FenceLayer.cs:UpdateVisual` 的
+  - **v17（根治，✅ 真机验证通过）**：根因 = `FenceLayer.cs:UpdateVisual` 的
     `bmp.GetHbitmap()` 参数less 重载不保留 alpha 通道（合成到背景、丢 alpha）→ 极低 alpha 渲染白。
     改动：`NativeMethods` 新增 `CreateDIBSection`+40字节`BITMAPINFO`；`FenceLayer` 新增
     `CreateAlphaDib`/`CopyPremultipliedToDib` 两个 static helper，用 CreateDIBSection + 拷贝
     premultiplied scan0 替代 GetHbitmap（精确保留 alpha）；`FillBodyPixels` 去掉最小 alpha=20 限制
     （允许真 0 → `(0,0,0,0)` 真透明）；边框跳过保留（防 GDI+ 低 alpha 画笔垃圾）。
-    发布 ds2（exe Aug 25 10:19）。**预期：滑块=0 主体真正透出壁纸**。若复验通过则 M4-B 透明度彻底结案。
+    发布 ds2（exe Aug 25 10:19），提交 `88dd23d` 推双远程。**用户复验确认：滑块=0 主体真正透出壁纸
+    （可点穿到桌面图标），中段/255 正常，图标文字不被压暗** → **M4-B 透明度问题彻底结案**（首个真机验证通过的根因修复）。
+    **v18 回归①（9fee49c，已验证通过）**：审计其余外观属性——HeaderOpacity/FrostOpacity 走 ColorMatrix 安全路径
+    无需改代码；边框阈值 10→16 加固。用户 5 张截图真机复验全部通过（BodyOpacity 15 边界、HeaderOpacity
+    0/10/30、毛玻璃开启均正常）。**M4-B 全部 8 个外观属性零回归，彻底结案**。
+  - **v19-v21 毛玻璃迭代**：v19 SystemEvents 壁纸刷新（失败，Win11 不可靠）；v20 消息专用窗口
+    HWND_MESSAGE 替代（待验证）；v21 FrostOpacity Math.Max(,20) 最小值（失败，三条全不通过）。
+  - **v22 毛玻璃根因修复（待真机复验）**：根因 = `EnsureFrostCapture` 的 `CopyFromScreen`
+    捕获到自己窗口上一帧（自捕获反馈循环）→ 低 FrostOpacity 白/高 FrostOpacity 暗无模糊/
+    同一 _frostBmp 内不同盒子不一致。修复 = CopyFromScreen 前 ShowWindow(SW_HIDE) 隐藏窗口
+    截取真壁纸；回退 v21 的 Math.Max 改动（渲染路径本身没问题）。发布 ds2（exe Aug 26 06:21）。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 
