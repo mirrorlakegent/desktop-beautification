@@ -1716,13 +1716,15 @@ public sealed class FenceLayer
             }
             else
             {
-                // v17: Skip border draw when border alpha is very low. GDI+ Pen with alpha < ~10
-                // composites as white/garbage onto the bitmap — the same GDI+ low-alpha defect that
-                // v13's LockBits body-fill sidestepped. At BodyOpacity=0, borderA = 0 → skipped;
-                // at small non-zero values it avoids the garbage. CreateDIBSection preserves the
-                // alpha channel exactly, but the pen garbage is introduced by GDI+ itself, so this
+                // Skip border draw when border alpha is low. GDI+ Pen with alpha < ~10-15 composites
+                // as white/garbage onto the bitmap (same low-alpha defect class as v13's body-fill bug).
+                // borderA = min(160, BodyOpacity*160/180); the unsafe grey zone is roughly borderA 10-15
+                // (BodyOpacity ≈ 12-17). Raising the skip threshold to 16 gives a safety margin so the
+                // border only draws when it composites cleanly. At BodyOpacity=0, borderA=0 → skipped
+                // (matches "near-transparent box fades its frame" intent). CreateDIBSection preserves
+                // the alpha channel exactly, but the pen garbage is introduced by GDI+ itself, so this
                 // guard must stay.
-                if (borderA >= 10)
+                if (borderA >= 16)
                 {
                     g.DrawPath(borderPen, borderPath);
                 }
