@@ -614,32 +614,72 @@ public sealed class FenceLayer
         }
     }
 
-    // ---- M4-B frosted: wallpaper-change refresh (SystemEvents → owner thread) ----
-    private bool _sysEventsHooked;
+    // ---- M4-B frosted: wallpaper-change refresh (message-only window → owner thread) ----
+    // A hidden message-only window (parent=HWND_MESSAGE) receives WM_SETTINGCHANGE broadcasts that
+    // our WorkerW child window cannot see. When the wallpaper changes (SPI_SETDESKWALLPAPER), it posts
+    // WM_FROST_REFRESH to the fence window so InvalidateFrost+UpdateVisual runs on the owner thread.
+    private IntPtr _frostListenerHwnd;
+    private NativeMethods.WndProc? _frostListenerWndProc; // keep delegate alive
 
     private void HookSystemEvents()
     {
-        if (_sysEventsHooked) return;
-        try { Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPrefChanged; _sysEventsHooked = true; }
-        catch { /* SystemEvents may be unavailable in some sessions; frosted just won't auto-refresh */ }
+        if (_frostListenerHwnd != IntPtr.Zero) return;
+        try
+        {
+            _frostListenerWndProc = FrostListenerWndProc;
+            string clsName = $"FenceFrostListener_{Guid.NewGuid():N}";
+            var wcex = new NativeMethods.WNDCLASSEX
+            {
+                cbSize = Marshal.SizeOf(typeof(NativeMethods.WNDCLASSEX)),
+                lpfnWndProc = _frostListenerWndProc,
+                hInstance = NativeMethods.GetModuleHandle(null),
+                lpszClassName = clsName,
+                style = 0 // no CS_DBLCLKS needed — this window only receives messages
+            };
+            ushort atom = NativeMethods.RegisterClassEx(ref wcex);
+            if (atom == 0) { HostLog.Write("FenceLayer.HookSystemEvents: RegisterClassEx for frost listener failed"); return; }
+
+            _frostListenerHwnd = NativeMethods.CreateWindowEx(
+                0, clsName, "Fence Frost Listener", 0, 0, 0, 0, 0,
+                NativeMethods.HWND_MESSAGE, IntPtr.Zero, NativeMethods.GetModuleHandle(null), IntPtr.Zero);
+            if (_frostListenerHwnd == IntPtr.Zero)
+                HostLog.Write("FenceLayer.HookSystemEvents: CreateWindowEx for frost listener failed");
+            else
+                HostLog.Write($"FenceLayer.HookSystemEvents: frost listener hwnd=0x{_frostListenerHwnd.ToInt64():X}");
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("FenceLayer.HookSystemEvents 失败（毛玻璃壁纸刷新不可用）", ex);
+        }
     }
 
     private void UnhookSystemEvents()
     {
-        if (!_sysEventsHooked) return;
-        try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPrefChanged; }
-        catch { /* ignore */ }
-        _sysEventsHooked = false;
+        if (_frostListenerHwnd != IntPtr.Zero)
+        {
+            try { NativeMethods.DestroyWindow(_frostListenerHwnd); }
+            catch { /* ignore */ }
+            _frostListenerHwnd = IntPtr.Zero;
+            _frostListenerWndProc = null;
+        }
     }
 
-    private void OnUserPrefChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    /// <summary>WndProc for the hidden message-only window. Only handles WM_SETTINGCHANGE for wallpaper changes.</summary>
+    private IntPtr FrostListenerWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        // SystemEvents.UserPreferenceChanged fires on a thread-pool thread and is delivered even when
-        // our window is a WorkerW child (unlike WM_SETTINGCHANGE, which only reaches top-level windows).
-        // We only POST a refresh; the actual InvalidateFrost+UpdateVisual runs on the window owner
-        // thread via WM_FROST_REFRESH, where GDI+/UpdateLayeredWindow are safe to touch.
-        if (e.Category == Microsoft.Win32.UserPreferenceCategory.Desktop && _hwnd != IntPtr.Zero && _appearance.Frosted)
-            FenceNative.PostMessage(_hwnd, WM_FROST_REFRESH, IntPtr.Zero, IntPtr.Zero);
+        if (msg == NativeMethods.WM_SETTINGCHANGE)
+        {
+            // wParam == SPI_SETDESKWALLPAPER (0x0014) means the desktop wallpaper changed.
+            // Post (not Send) to the fence window so it runs on the fence's owner thread.
+            if ((ulong)wParam.ToInt64() == NativeMethods.SPI_SETDESKWALLPAPER &&
+                _hwnd != IntPtr.Zero && _appearance.Frosted)
+            {
+                FenceNative.PostMessage(_hwnd, WM_FROST_REFRESH, IntPtr.Zero, IntPtr.Zero);
+                HostLog.Write("FenceLayer.FrostListenerWndProc: 检测到壁纸更换，已发送 WM_FROST_REFRESH");
+            }
+            return IntPtr.Zero;
+        }
+        return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
     }
 
     /// <summary>Render the fence surface into an off-screen 32bppARGB bitmap and push it to the

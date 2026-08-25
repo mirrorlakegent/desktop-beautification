@@ -74,19 +74,29 @@ v17 改的是整条位图 alpha 通路，故对所有依赖低 alpha 的外观�
   `WM_SETTINGCHANGE` 仅广播给**顶层窗口**，而主路径是 WorkerW 子窗口 → 收不到。
   故 Frosted 开启时换壁纸 → 模糊层陈旧（尤其本项目的 `StaticWallpaper` 改壁纸时）。
 
-### v19 修复
-- `FenceNative.cs`：新增 `PostMessage` P/Invoke。
-- `FenceLayer.cs`：订阅 `SystemEvents.UserPreferenceChanged`（有独立顶层消息窗口、跨父窗口、
-  收得到广播）；`UserPreferenceCategory.Desktop` 时 `PostMessage(WM_FROST_REFRESH)` 回到本窗口
-  线程，在 WndProc 同线程 `InvalidateFrost()`+`UpdateVisual()` 重捕壁纸。
-  `Close()` 注销订阅防泄漏。
-- 已发布 ds2（exe Aug 25 23:16），0 错误。
+### v19 修复（❌ 真机验证失败）
+- 用 `SystemEvents.UserPreferenceChanged` 订阅壁纸更换 → **Win11 上不可靠**（设置页可能不走
+  传统 SPI_SETDESKWALLPAPER 路径，或事件在线程池丢失）。用户换壁纸后模糊层仍显示旧图。
 
-### 深度验证测试矩阵（待用户真机复验）
-1. **Frosted 开启 + 换壁纸（含幻灯片切换）** → 模糊层应刷新为新壁纸（v19 修复点）。
-2. **FrostOpacity = 0** → 纯模糊无暗色染色；**= 200** → 重暗染色。
+### v20 修复（消息专用窗口，替代 SystemEvents）
+- **根因**：`SystemEvents` 是 .NET 抽象层，在 Win11 上对壁纸变更事件丢失。
+- **方案**：创建隐藏 **消息专用窗口**（`parent=HWND_MESSAGE`），直接接收 OS 原生
+  `WM_SETTINGCHANGE` 广播——这是最底层的 Win32 通知，不经过任何 .NET 抽象，
+  且消息专用窗口必定收到广播（子窗口收不到的它也能收）。
+- **改动**：
+  - `NativeMethods.cs`：新增 `WM_SETTINGCHANGE`(0x001A) + `HWND_MESSAGE`(-3)。
+  - `FenceLayer.cs`：删除 `SystemEvents.UserPreferenceChanged`；新增
+    `_frostListenerHwnd` + `FrostListenerWndProc`（消息专用窗口 WndProc，仅处理
+    `WM_SETTINGCHANGE` + `wParam==SPI_SETDESKWALLPAPER` 时 post `WM_FROST_REFRESH`）；
+    `HookSystemEvents()` 改为 `RegisterClassEx` + `CreateWindowEx(HWND_MESSAGE)`；
+    `UnhookSystemEvents()` 改为 `DestroyWindow`。
+- 已发布 ds2（exe Aug 25 23:29），0 错误。
+
+### 深度验证测试矩阵（v20 待复验）
+1. **⭐ Frosted 开启 + 换壁纸（含幻灯片切换）** → 模糊层应刷新为新壁纸（v20 核心修复点）。
+2. **FrostOpacity = 0** → 纯模糊无暗色染色（较亮）；**= 200** → 重暗染色（较暗）。✅ v19 已验通。
 3. **Frosted 开启时拖拽盒子** → 盒下毛玻璃正确跟随（静态缓存按盒取位）。
 4. **多屏**：主/副屏盒子毛玻璃是否对齐（WM_DISPLAYCHANGE 已处理）。
 5. **DPI 切换 / 分辨率变化** → 毛玻璃重新捕获无花屏。
 6. **性能**：开启毛玻璃瞬间的卡顿是否可接受（全窗口 3×blur 一次性）。
-7. 关闭毛玻璃 → 回落普通半透明无残留。
+7. 关闭毛玻璃 → 回落普通半透明无残留。✅ v19 已验通。

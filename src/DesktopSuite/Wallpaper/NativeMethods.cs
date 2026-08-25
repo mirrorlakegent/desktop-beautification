@@ -81,6 +81,9 @@ internal static class NativeMethods
     public const uint SPI_SETDESKWALLPAPER = 0x0014;
     public const uint SPIF_UPDATEINIFILE = 0x01;
     public const uint SPIF_SENDCHANGE = 0x02;
+    public const uint WM_SETTINGCHANGE = 0x001A;
+    /// <summary>Message-only window parent: receives broadcasts (WM_SETTINGCHANGE etc.) without visible UI.</summary>
+    public static readonly IntPtr HWND_MESSAGE = new IntPtr(-3);
 
     [DllImport("user32.dll")]
     public static extern int GetSystemMetrics(int nIndex);
