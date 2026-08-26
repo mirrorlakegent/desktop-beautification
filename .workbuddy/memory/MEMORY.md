@@ -59,10 +59,12 @@
     0/10/30、毛玻璃开启均正常）。**M4-B 全部 8 个外观属性零回归，彻底结案**。
   - **v19-v21 毛玻璃迭代**：v19 SystemEvents 壁纸刷新（失败，Win11 不可靠）；v20 消息专用窗口
     HWND_MESSAGE 替代（待验证）；v21 FrostOpacity Math.Max(,20) 最小值（失败，三条全不通过）。
-  - **v22 毛玻璃根因修复（待真机复验）**：根因 = `EnsureFrostCapture` 的 `CopyFromScreen`
-    捕获到自己窗口上一帧（自捕获反馈循环）→ 低 FrostOpacity 白/高 FrostOpacity 暗无模糊/
-    同一 _frostBmp 内不同盒子不一致。修复 = CopyFromScreen 前 ShowWindow(SW_HIDE) 隐藏窗口
-    截取真壁纸；回退 v21 的 Math.Max 改动（渲染路径本身没问题）。发布 ds2（exe Aug 26 06:21）。
+  - **v22 毛玻璃（SW_HIDE 失败）**：根因定位正确（CopyFromScreen 自捕获反馈循环），
+    但修复方案 ShowWindow(SW_HIDE) 对 WS_EX_LAYERED 窗口无效——DWM 缓存最后 ULW 帧，
+    SW_HIDE 不清除缓存。用户复验：FrostOpacity=0 仍全白、四盒不一致。
+  - **v23 毛玻璃（待真机复验）**：改用 PushTransparentFrame() —— 通过 UpdateLayeredWindow
+    推送一帧全 alpha=0 位图（CreateDIBSection + 全零 scan0），直接告诉 DWM"此窗口对合成无贡献"，
+    Sleep(80) 后 CopyFromScreen 截取真壁纸。发布 ds2（exe Aug 26 23:40）。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 

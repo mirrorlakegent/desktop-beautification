@@ -2296,6 +2296,68 @@ public sealed class FenceLayer
         }
     }
 
+    /// <summary>
+    /// Push a fully-transparent frame (all pixels alpha=0) via UpdateLayeredWindow.
+    /// This is the ONLY reliable way to make a WS_EX_LAYERED window invisible to DWM's compositor.
+    /// ShowWindow(SW_HIDE) does NOT work reliably — DWM caches the last ULW frame and may
+    /// continue compositing it long after SW_HIDE (v22 proved this: CopyFromScreen still
+    /// captured our own previous frame after SW_HIDE+50ms sleep).
+    ///
+    /// Called once per frost session (when _frostBmp is null), before CopyFromScreen.
+    /// After this returns, DWM has removed our window from the composition, so CopyFromScreen
+    /// captures only the real desktop (wallpaper + icons) behind us.
+    /// </summary>
+    private void PushTransparentFrame()
+    {
+        if (_hwnd == IntPtr.Zero || _winW <= 0 || _winH <= 0) return;
+        IntPtr hdcScreen = IntPtr.Zero;
+        IntPtr hdcMem = IntPtr.Zero;
+        IntPtr hBmp = IntPtr.Zero;
+        IntPtr hBmpOld = IntPtr.Zero;
+        try
+        {
+            // All-zero bitmap: Bitmap constructor zero-initializes → all pixels are (0,0,0,0)
+            using var clearBmp = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
+
+            hdcScreen = NativeMethods.GetDC(IntPtr.Zero);
+            hdcMem = NativeMethods.CreateCompatibleDC(hdcScreen);
+            if (hdcMem == IntPtr.Zero) return;
+
+            hBmp = CreateAlphaDib(hdcMem, clearBmp, out IntPtr ppvBits);
+            if (hBmp == IntPtr.Zero) return;
+            CopyPremultipliedToDib(clearBmp, ppvBits); // copies all-zeros → fully transparent DIB
+            hBmpOld = NativeMethods.SelectObject(hdcMem, hBmp);
+
+            NativeMethods.GetWindowRect(_hwnd, out var wr);
+            var pDst = new NativeMethods.POINT { X = wr.Left, Y = wr.Top };
+            var pSrc = new NativeMethods.POINT { X = 0, Y = 0 };
+            var size = new NativeMethods.SIZE { cx = _winW, cy = _winH };
+            var blend = new NativeMethods.BLENDFUNCTION
+            {
+                BlendOp = NativeMethods.AC_SRC_OVER,
+                BlendFlags = 0,
+                SourceConstantAlpha = 255,
+                AlphaFormat = 1 // AC_SRC_ALPHA — respects per-pixel alpha (all 0 = fully transparent)
+            };
+
+            NativeMethods.UpdateLayeredWindow(
+                _hwnd, IntPtr.Zero, ref pDst, ref size, hdcMem, ref pSrc, 0, ref blend,
+                NativeMethods.ULW_ALPHA);
+        }
+        catch { /* non-fatal: worst case frost captures own previous frame (pre-v23 behavior) */ }
+        finally
+        {
+            if (hBmpOld != IntPtr.Zero && hdcMem != IntPtr.Zero)
+                NativeMethods.SelectObject(hdcMem, hBmpOld);
+            if (hBmp != IntPtr.Zero)
+                NativeMethods.DeleteObject(hBmp);
+            if (hdcMem != IntPtr.Zero)
+                NativeMethods.DeleteDC(hdcMem);
+            if (hdcScreen != IntPtr.Zero)
+                NativeMethods.ReleaseDC(IntPtr.Zero, hdcScreen);
+        }
+    }
+
     /// <summary>M4-B frosted glass: capture the desktop region directly behind the fence window and
     /// blur it, so a semi-transparent box reveals a frosted backdrop instead of flat dark. The capture
     /// is cached for the whole Frosted session and reused across repaints (and during drag) — only
@@ -2313,15 +2375,20 @@ public sealed class FenceLayer
             // layered window's previous frame. If we captured that, the frost backdrop would
             // contain a blurred copy of our own frosted rendering, creating a feedback loop:
             //   low FrostOpacity → previous frame is bright → capture is bright → next frame
-            //   stays white forever (v21 bug: white/washed-out at low opacity, flat-dark at
+            //   stays white forever (v21/v22 bug: white/washed-out at low opacity, flat-dark at
             //   high opacity, inconsistent per-box content in same _frostBmp).
             //
-            // Fix: temporarily hide (SW_HIDE) so CopyFromScreen captures the REAL desktop
-            // (wallpaper + icons) behind us. SW_HIDE is safe for our layered window type
-            // (HideFences/ShowFences already uses it). Window is invisible for ~50ms — this
-            // only runs once per frost session, not per-frame.
-            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_HIDE);
-            System.Threading.Thread.Sleep(50); // let DWM compose the hide
+            // v22 tried ShowWindow(SW_HIDE) + Sleep(50) — FAILED because DWM caches the last
+            // frame pushed by UpdateLayeredWindow. SW_HIDE changes the window's visibility FLAG
+            // but DWM continues compositing the cached ULW frame until it processes the hide,
+            // which can take longer than any reasonable sleep (and causes visible flicker).
+            //
+            // v23 fix: push a fully-transparent frame (all pixels alpha=0) via UpdateLayeredWindow.
+            // This DIRECTLY tells DWM "this window contributes nothing to the composition" — the
+            // correct and instant way to make a layered window invisible. After DWM processes this
+            // transparent frame, CopyFromScreen captures the real desktop (wallpaper + icons).
+            PushTransparentFrame();
+            System.Threading.Thread.Sleep(80); // let DWM process the transparent frame
 
             NativeMethods.GetWindowRect(_hwnd, out var wr);
             using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
@@ -2331,9 +2398,8 @@ public sealed class FenceLayer
                 gc.CopyFromScreen(wr.Left, wr.Top, 0, 0, new Size(_winW, _winH));
             }
 
-            // Re-show (UpdateVisual will push a real frame making it visible again;
-            // this just ensures the handle isn't left hidden if we error out below).
-            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_SHOW);
+            // Re-show is not needed: UpdateVisual (called after EnsureFrostCapture returns)
+            // will push a real frame making the window visible again.
             int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
             var blurred = BoxBlur(raw, radius);
             // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)
