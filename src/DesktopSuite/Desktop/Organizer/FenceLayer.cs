@@ -2316,8 +2316,14 @@ public sealed class FenceLayer
         IntPtr hBmpOld = IntPtr.Zero;
         try
         {
-            // All-zero bitmap: Bitmap constructor zero-initializes → all pixels are (0,0,0,0)
+            // CRITICAL: Bitmap constructor does NOT guarantee zero-initialization of pixel memory.
+            // GDI+ may allocate from a reused buffer containing garbage data (including non-zero
+            // alpha values). Without explicit clearing, those garbage pixels would be copied into
+            // the DIB and pushed to DWM — making the "transparent frame" actually visible and
+            // defeating the entire purpose (v23 bug: CopyFromScreen still captured our own window).
             using var clearBmp = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
+            using (var clearGc = Graphics.FromImage(clearBmp))
+                clearGc.Clear(Color.Transparent); // every pixel → (0,0,0,0) truly transparent
 
             hdcScreen = NativeMethods.GetDC(IntPtr.Zero);
             hdcMem = NativeMethods.CreateCompatibleDC(hdcScreen);

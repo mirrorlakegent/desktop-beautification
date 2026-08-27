@@ -62,9 +62,10 @@
   - **v22 毛玻璃（SW_HIDE 失败）**：根因定位正确（CopyFromScreen 自捕获反馈循环），
     但修复方案 ShowWindow(SW_HIDE) 对 WS_EX_LAYERED 窗口无效——DWM 缓存最后 ULW 帧，
     SW_HIDE 不清除缓存。用户复验：FrostOpacity=0 仍全白、四盒不一致。
-  - **v23 毛玻璃（待真机复验）**：改用 PushTransparentFrame() —— 通过 UpdateLayeredWindow
-    推送一帧全 alpha=0 位图（CreateDIBSection + 全零 scan0），直接告诉 DWM"此窗口对合成无贡献"，
-    Sleep(80) 后 CopyFromScreen 截取真壁纸。发布 ds2（exe Aug 26 23:40）。
+  - **v23 毛玻璃（PushTransparentFrame 失败）**：方案方向正确（ULW 全透明帧替代 SW_HIDE），
+    但 `new Bitmap()` 未零初始化 → 垃圾 alpha 像素 → 窗口未真正透明 → 仍自捕获。
+  - **v24 毛玻璃（待真机复验）**：修复 Bitmap 零初始化（`Graphics.Clear(Transparent)`）；
+    若通过则毛玻璃自捕获问题彻底结案。发布 ds2（exe Aug 27 21:29）。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 
