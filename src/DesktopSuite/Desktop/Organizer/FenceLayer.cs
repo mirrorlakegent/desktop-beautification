@@ -2207,7 +2207,13 @@ public sealed class FenceLayer
     /// </summary>
     private void FillBodyPixels(Bitmap bmp)
     {
-        int bodyA = _appearance.BodyOpacity;
+        // v25: In frosted mode, fill body with alpha=0 (fully transparent) instead of BodyOpacity.
+        // The frosted backdrop (_frostBmp) is drawn on top by DrawBoxes — there is no "dark base layer"
+        // to cover. Filling with BodyOpacity here would create a "fill-then-overwrite" race condition
+        // where GDI+ DrawImage must fully overwrite the pre-filled pixels, which proved unreliable
+        // across v21–v24. With alpha=0, the body starts transparent and DrawImage is the sole
+        // color source — no coverage dependency on GDI+ compositing.
+        int bodyA = _appearance.Frosted ? 0 : _appearance.BodyOpacity;
         // v17: NO minimum-alpha clamp. The v9..v16 "white-at-low-opacity" bug was caused by
         // Bitmap.GetHbitmap() discarding the alpha channel — NOT by the alpha value itself.
         // v17 replaces GetHbitmap() with CreateDIBSection, which preserves the alpha byte exactly,
@@ -2376,36 +2382,32 @@ public sealed class FenceLayer
         if (_hwnd == IntPtr.Zero || _winW <= 0 || _winH <= 0) return;
         try
         {
-            // ---- Avoid self-capture feedback loop ----
-            // CopyFromScreen captures the composited screen OUTPUT — which includes our own
-            // layered window's previous frame. If we captured that, the frost backdrop would
-            // contain a blurred copy of our own frosted rendering, creating a feedback loop:
-            //   low FrostOpacity → previous frame is bright → capture is bright → next frame
-            //   stays white forever (v21/v22 bug: white/washed-out at low opacity, flat-dark at
-            //   high opacity, inconsistent per-box content in same _frostBmp).
+            // ---- Avoid self-capture ----
+            // v22 tried ShowWindow(SW_HIDE) — FAILED: DWM caches the last ULW frame.
+            // v23/v24 tried PushTransparentFrame (ULW all-transparent frame) — FAILED: DWM may not
+            //   process the transparent frame reliably within any reasonable sleep (4 rounds of
+            //   increasing sleep/clear fixes all produced identical "some boxes white" artifacts).
             //
-            // v22 tried ShowWindow(SW_HIDE) + Sleep(50) — FAILED because DWM caches the last
-            // frame pushed by UpdateLayeredWindow. SW_HIDE changes the window's visibility FLAG
-            // but DWM continues compositing the cached ULW frame until it processes the hide,
-            // which can take longer than any reasonable sleep (and causes visible flicker).
-            //
-            // v23 fix: push a fully-transparent frame (all pixels alpha=0) via UpdateLayeredWindow.
-            // This DIRECTLY tells DWM "this window contributes nothing to the composition" — the
-            // correct and instant way to make a layered window invisible. After DWM processes this
-            // transparent frame, CopyFromScreen captures the real desktop (wallpaper + icons).
-            PushTransparentFrame();
-            System.Threading.Thread.Sleep(80); // let DWM process the transparent frame
+            // v25 fix: physically move the window off-screen with SetWindowPos. This REMOVES the
+            // window from DWM's composition entirely — no caching, no timing issues. The desktop
+            // behind the window's original position is immediately visible, so CopyFromScreen
+            // captures only the real wallpaper + icons. After capture, move the window back.
+            NativeMethods.GetWindowRect(_hwnd, out var originalRect);
+            uint swpFlags = NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER
+                           | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOSENDCHANGING;
+            NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, -99999, -99999, 0, 0, swpFlags);
+            System.Threading.Thread.Sleep(100); // let DWM remove window from composition
 
-            NativeMethods.GetWindowRect(_hwnd, out var wr);
             using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
             using (var gc = Graphics.FromImage(raw))
             {
-                // Window is now invisible — this captures the actual desktop wallpaper + icons.
-                gc.CopyFromScreen(wr.Left, wr.Top, 0, 0, new Size(_winW, _winH));
+                // Capture the desktop at the window's ORIGINAL position (now exposed).
+                gc.CopyFromScreen(originalRect.Left, originalRect.Top, 0, 0, new Size(_winW, _winH));
             }
 
-            // Re-show is not needed: UpdateVisual (called after EnsureFrostCapture returns)
-            // will push a real frame making the window visible again.
+            // Move window back to its original position immediately.
+            NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
+                originalRect.Left, originalRect.Top, 0, 0, swpFlags);
             int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
             var blurred = BoxBlur(raw, radius);
             // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)
