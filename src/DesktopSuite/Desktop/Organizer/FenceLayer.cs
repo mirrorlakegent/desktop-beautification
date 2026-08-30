@@ -2383,38 +2383,31 @@ public sealed class FenceLayer
         try
         {
             // ---- Avoid self-capture ----
-            // v22 tried ShowWindow(SW_HIDE) — FAILED: DWM caches the last ULW frame.
-            // v23/v24 tried PushTransparentFrame (ULW all-transparent frame) — FAILED: DWM may not
-            //   process the transparent frame reliably within any reasonable sleep (4 rounds of
-            //   increasing sleep/clear fixes all produced identical "some boxes white" artifacts).
+            // v22 SW_HIDE: FAILED — DWM caches last ULW frame, hide doesn't clear it.
+            // v23/v24 PushTransparentFrame (ULW alpha=0 frame): FAILED — DWM doesn't reliably
+            //   process transparent frames within any sleep duration (4 rounds proved this).
+            // v25 SetWindowPos(-99999,-99999): capture WORKS (frost renders!) but DWM
+            //   leaves stale cache in the exposed area → residual window ghosting.
+            // v25b RedrawWindow: made it WORSE — triggered extra repaints that interfered.
             //
-            // v25 fix: physically move the window off-screen with SetWindowPos. This REMOVES the
-            // window from DWM's composition entirely — no caching, no timing issues. The desktop
-            // behind the window's original position is immediately visible, so CopyFromScreen
-            // captures only the real wallpaper + icons. After capture, move the window back.
+            // v25c fix: ShowWindow(SW_MINIMIZE).
+            // SW_MINIMIZE is FUNDAMENTALLY different from SW_HIDE:
+            //   - SW_HIDE: window becomes invisible but DWM may keep compositing cached frame
+            //   - SW_MINIMIZE: window is REMOVED from desktop composition entirely (goes to
+            //     taskbar). DWM must repaint the exposed area — no caching possible.
+            // After minimization, the desktop behind our window is guaranteed clean.
             NativeMethods.GetWindowRect(_hwnd, out var originalRect);
-            uint swpFlags = NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER
-                           | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOSENDCHANGING;
-            NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, -99999, -99999, 0, 0, swpFlags);
-            System.Threading.Thread.Sleep(200); // let DWM remove window from composition
-
-            // Force the desktop to repaint the exposed area so CopyFromScreen
-            // captures clean wallpaper+icons instead of stale DWM cache artifacts.
-            var desktopHwnd = NativeMethods.GetDesktopWindow();
-            NativeMethods.RedrawWindow(desktopHwnd, IntPtr.Zero, IntPtr.Zero,
-                NativeMethods.RDW_INVALIDATE | NativeMethods.RDW_ALLCHILDREN | NativeMethods.RDW_ERASE | NativeMethods.RDW_UPDATENOW);
-            System.Threading.Thread.Sleep(50); // let the paint complete
+            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_MINIMIZE);
+            System.Threading.Thread.Sleep(300); // let DWM fully repaint exposed area
 
             using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
             using (var gc = Graphics.FromImage(raw))
             {
-                // Capture the desktop at the window's ORIGINAL position (now exposed).
                 gc.CopyFromScreen(originalRect.Left, originalRect.Top, 0, 0, new Size(_winW, _winH));
             }
 
-            // Move window back to its original position immediately.
-            NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
-                originalRect.Left, originalRect.Top, 0, 0, swpFlags);
+            // Restore — UpdateVisual will push a real frame making the window visible again.
+            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_RESTORE);
             int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
             var blurred = BoxBlur(raw, radius);
             // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)

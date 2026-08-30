@@ -66,10 +66,12 @@
     但 `new Bitmap()` 未零初始化 → 垃圾 alpha 像素 → 窗口未真正透明 → 仍自捕获。
   - **v24 毛玻璃（失败）**：修复 Bitmap 零初始化（`Graphics.Clear(Transparent)`）；
     用户复验仍不行——证明 PushTransparentFrame 方向在本环境不可行（DWM 不可靠处理 ULW 透明帧）。
-  - **v25 毛玻璃（待真机复验）**：双管齐下根治：
+  - **v25 毛玻璃（✅ 不再全白，❌ 有残留）**：双管齐下：
     ① `FillBodyPixels` 在 frosted 模式填充 alpha=0（透明），消除"先填深色再盖"的 GDI+ 合成依赖；
-    ② `EnsureFrostCapture` 用 `SetWindowPos(-99999,-99999)` 物理移出屏幕替代 PushTransparentFrame，
-    彻底从 DWM 合成中移除窗口再 CopyFromScreen。发布 ds2（exe Aug 29 01:00），提交 `dee9b97`。
+    ② `EnsureFrostCapture` 用 `SetWindowPos(-99999,-99999)` 物理移出屏幕替代 PushTransparentFrame。
+    用户复验：四盒均显示毛玻璃效果（不再全白！），但捕获到 DWM 缓存残留图像。提交 `dee9b97`。
+  - **v25b 毛玻璃（待真机复验）**：Sleep 100→200ms + `RedrawWindow(RDW_UPDATENOW)` 强制桌面重绘窗口区域，
+    消除 DWM 缓存残留。提交 `2678d53`，发布 ds2（exe Aug 30 08:01）。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 
