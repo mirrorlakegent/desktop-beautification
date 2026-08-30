@@ -70,8 +70,20 @@
     ① `FillBodyPixels` 在 frosted 模式填充 alpha=0（透明），消除"先填深色再盖"的 GDI+ 合成依赖；
     ② `EnsureFrostCapture` 用 `SetWindowPos(-99999,-99999)` 物理移出屏幕替代 PushTransparentFrame。
     用户复验：四盒均显示毛玻璃效果（不再全白！），但捕获到 DWM 缓存残留图像。提交 `dee9b97`。
-  - **v25b 毛玻璃（待真机复验）**：Sleep 100→200ms + `RedrawWindow(RDW_UPDATENOW)` 强制桌面重绘窗口区域，
-    消除 DWM 缓存残留。提交 `2678d53`，发布 ds2（exe Aug 30 08:01）。
+  - **v25b 毛玻璃（失败，更差）**：Sleep 100→200ms + `RedrawWindow(RDW_UPDATENOW)`。
+    用户复验"还不如上一版本"——RedrawWindow 触发额外重绘反成干扰。提交 `2678d53`。
+  - **v25c（未复验即弃）**：`SW_MINIMIZE`。预判失效——本窗口是 WorkerW **子窗口**，
+    无标准最小化行为，`SW_MINIMIZE` 大概率不生效。提交 `85e95cd`。
+  - **v25d 毛玻璃（✅ 架构性换路线，待复验）**：**彻底放弃截屏**。新增 `LoadWallpaperFrost()`
+    用 `IDesktopWallpaper` COM（项目本就有此接口）直接读壁纸文件，按 `DESKTOP_WALLPAPER_POSITION`
+    （FILL/FIT/STRETCH/CENTER/TILE）换算缩放 + 虚拟屏幕位置映射裁剪，再三重盒式模糊。
+    **零窗口操作 / 零 DWM 依赖 / 零时序竞争 / 零反馈循环**。
+    取舍：不含桌面图标（对毛玻璃观感更贴合真实——真实毛玻璃模糊的是背景本身而非其上物体）。
+    截屏路径降级为 fallback 安全网。新增虚拟屏幕常量 SM_[XY]VIRTUALSCREEN / SM_C[XY]VIRTUALSCREEN。
+    **壁纸更换刷新链路已验证完整**：`WM_SETTINGCHANGE` → `PostMessage(WM_FROST_REFRESH)`
+    → `InvalidateFrost()+UpdateVisual()` → 重新读新壁纸文件。提交 `2c3aa09`。
+  - **关键教训（毛玻璃）**：当窗口是桌面 WorkerW 子窗口时，任何"隐藏自己再截屏"的方案
+    都在与 DWM 缓存搏斗，不可能可靠。正确做法是**不截屏**——直接从数据源（壁纸文件）取内容。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 

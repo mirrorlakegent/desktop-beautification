@@ -2396,22 +2396,50 @@ public sealed class FenceLayer
         object? comObj = null;
         try
         {
-            comObj = new NativeMethods.DesktopWallpaperClass();
-            var dw = (NativeMethods.IDesktopWallpaper)comObj;
-
-            // Monitor 0 — the fence window lives on the primary desktop.
-            string monitorId = "";
-            try { dw.GetMonitorDevicePathAt(0, out monitorId); }
-            catch { monitorId = ""; }
-
-            int hr = dw.GetWallpaper(monitorId, out string path);
-            if (hr != 0 || string.IsNullOrEmpty(path) || !File.Exists(path))
+            // ---- Priority 1: DesktopSuite's own wallpaper (LastMedia) ----
+            // The WallpaperRotator stores the current media path in AppSettings.LastMedia.
+            // This covers BOTH static images (set via SetStatic/StartDynamic) AND dynamic
+            // videos (mpv renderer) — the system IDesktopWallpaper API only knows about
+            // static wallpapers set through it, missing DesktopSuite's rotation engine.
+            string? path = null;
+            var settings = AppSettings.Load();
+            if (!string.IsNullOrEmpty(settings.LastMedia) && File.Exists(settings.LastMedia))
             {
-                HostLog.Write($"LoadWallpaperFrost：无有效壁纸 hr={hr} path={path}");
+                path = settings.LastMedia;
+                HostLog.Write($"LoadWallpaperFrost：使用 DesktopSuite 当前壁纸 {path}");
+            }
+
+            // ---- Priority 2: system-level wallpaper via IDesktopWallpaper COM ----
+            if (path == null)
+            {
+                comObj = new NativeMethods.DesktopWallpaperClass();
+                var dw = (NativeMethods.IDesktopWallpaper)comObj;
+
+                string monitorId = "";
+                try { dw.GetMonitorDevicePathAt(0, out monitorId); }
+                catch { monitorId = ""; }
+
+                int hr = dw.GetWallpaper(monitorId, out string sysPath);
+                if (hr == 0 && !string.IsNullOrEmpty(sysPath) && File.Exists(sysPath))
+                    path = sysPath;
+                else
+                    HostLog.Write($"LoadWallpaperFrost：系统壁纸不可用 hr={hr} path={sysPath}");
+            }
+
+            if (path == null)
+            {
+                HostLog.Write("LoadWallpaperFrost：无任何可用壁纸源");
                 return null;
             }
 
-            dw.GetPosition(out var pos);
+            // Get wallpaper position mode. If we have a COM handle, ask it; otherwise
+            // default to FILL (the most common setting on modern Windows).
+            var pos = NativeMethods.DESKTOP_WALLPAPER_POSITION.DWPOS_FILL;
+            if (comObj != null)
+            {
+                try { ((NativeMethods.IDesktopWallpaper)comObj).GetPosition(out pos); }
+                catch { /* keep default */ }
+            }
 
             using var src = Image.FromFile(path);
             if (src.Width <= 0 || src.Height <= 0) return null;
