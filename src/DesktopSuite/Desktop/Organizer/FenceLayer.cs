@@ -2370,6 +2370,113 @@ public sealed class FenceLayer
         }
     }
 
+    // Virtual-screen metrics (GetSystemMetrics indices).
+    private const int SM_XVIRTUALSCREEN = 76;
+    private const int SM_YVIRTUALSCREEN = 77;
+    private const int SM_CXVIRTUALSCREEN = 78;
+    private const int SM_CYVIRTUALSCREEN = 79;
+
+    /// <summary>v25d: build the frosted backdrop by loading the WALLPAPER FILE directly via the
+    /// IDesktopWallpaper COM interface, instead of screenshotting the screen.
+    ///
+    /// WHY — every screenshot-based approach (v21→v25c, six rounds) fights the same unwinnable
+    /// battle: our window is a child of the desktop WorkerW, so CopyFromScreen either captures our
+    /// own previous frame (SW_HIDE / ULW-transparent / SW_MINIMIZE all fail to clear DWM's cached
+    /// frame) or captures stale DWM cache from the just-exposed area (SetWindowPos off-screen).
+    ///
+    /// Reading the wallpaper file sidesteps ALL of it:
+    ///   - no window manipulation, no DWM, no timing races, no feedback loop
+    ///   - the backdrop is exactly the image the user chose
+    /// Trade-off: desktop icons are not included. For a frosted-glass effect that is arguably MORE
+    /// correct — real frosted glass blurs the backdrop, not the objects sitting on top of it.
+    ///
+    /// Returns null on any failure (caller falls back to the old screenshot path).</summary>
+    private Bitmap? LoadWallpaperFrost()
+    {
+        object? comObj = null;
+        try
+        {
+            comObj = new NativeMethods.DesktopWallpaperClass();
+            var dw = (NativeMethods.IDesktopWallpaper)comObj;
+
+            // Monitor 0 — the fence window lives on the primary desktop.
+            string monitorId = "";
+            try { dw.GetMonitorDevicePathAt(0, out monitorId); }
+            catch { monitorId = ""; }
+
+            int hr = dw.GetWallpaper(monitorId, out string path);
+            if (hr != 0 || string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                HostLog.Write($"LoadWallpaperFrost：无有效壁纸 hr={hr} path={path}");
+                return null;
+            }
+
+            dw.GetPosition(out var pos);
+
+            using var src = Image.FromFile(path);
+            if (src.Width <= 0 || src.Height <= 0) return null;
+
+            NativeMethods.GetWindowRect(_hwnd, out var wr);
+            int vx = NativeMethods.GetSystemMetrics(SM_XVIRTUALSCREEN);
+            int vy = NativeMethods.GetSystemMetrics(SM_YVIRTUALSCREEN);
+            int vw = NativeMethods.GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            int vh = NativeMethods.GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            if (vw <= 0 || vh <= 0) { vw = Screen.PrimaryScreen?.Bounds.Width ?? _winW; vh = Screen.PrimaryScreen?.Bounds.Height ?? _winH; }
+
+            // Scale the wallpaper onto the virtual screen per its position mode, then map our
+            // window's virtual-screen rect back into wallpaper source coordinates.
+            float sx, sy;
+            switch (pos)
+            {
+                case NativeMethods.DESKTOP_WALLPAPER_POSITION.DWPOS_STRETCH:
+                    sx = (float)vw / src.Width; sy = (float)vh / src.Height; break;
+                case NativeMethods.DESKTOP_WALLPAPER_POSITION.DWPOS_FIT:
+                    { float s = Math.Min((float)vw / src.Width, (float)vh / src.Height); sx = sy = s; break; }
+                default: // DWPOS_FILL (most common) and anything else
+                    { float s = Math.Max((float)vw / src.Width, (float)vh / src.Height); sx = sy = s; break; }
+            }
+
+            float scaledW = src.Width * sx, scaledH = src.Height * sy;
+            float offX = (vw - scaledW) / 2f, offY = (vh - scaledH) / 2f;
+
+            float srcX = ((wr.Left - vx) - offX) / sx;
+            float srcY = ((wr.Top - vy) - offY) / sy;
+            float srcW = _winW / sx, srcH = _winH / sy;
+
+            var canvas = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(canvas))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                // DWPOS_CENTER/TILE: just centre the image unscaled (good enough, rare in practice).
+                if (pos == NativeMethods.DESKTOP_WALLPAPER_POSITION.DWPOS_CENTER ||
+                    pos == NativeMethods.DESKTOP_WALLPAPER_POSITION.DWPOS_TILE)
+                {
+                    g.DrawImage(src, (int)(_winW / 2f - src.Width / 2f), (int)(_winH / 2f - src.Height / 2f));
+                }
+                else
+                {
+                    g.DrawImage(src,
+                        new RectangleF(0, 0, _winW, _winH),
+                        new RectangleF(srcX, srcY, srcW, srcH),
+                        GraphicsUnit.Pixel);
+                }
+            }
+            HostLog.Write($"LoadWallpaperFrost：已加载壁纸 path={path} pos={pos} scale={sx:F3}");
+            return canvas;
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("LoadWallpaperFrost 失败（回落到截屏）", ex);
+            return null;
+        }
+        finally
+        {
+            if (comObj != null && Marshal.IsComObject(comObj))
+                Marshal.ReleaseComObject(comObj);
+        }
+    }
+
     /// <summary>M4-B frosted glass: capture the desktop region directly behind the fence window and
     /// blur it, so a semi-transparent box reveals a frosted backdrop instead of flat dark. The capture
     /// is cached for the whole Frosted session and reused across repaints (and during drag) — only
@@ -2380,45 +2487,47 @@ public sealed class FenceLayer
         if (!_appearance.Frosted) { InvalidateFrost(); return; }
         if (_frostBmp != null) return;       // reuse cached backdrop
         if (_hwnd == IntPtr.Zero || _winW <= 0 || _winH <= 0) return;
+        Bitmap? raw = null;
         try
         {
-            // ---- Avoid self-capture ----
-            // v22 SW_HIDE: FAILED — DWM caches last ULW frame, hide doesn't clear it.
-            // v23/v24 PushTransparentFrame (ULW alpha=0 frame): FAILED — DWM doesn't reliably
-            //   process transparent frames within any sleep duration (4 rounds proved this).
-            // v25 SetWindowPos(-99999,-99999): capture WORKS (frost renders!) but DWM
-            //   leaves stale cache in the exposed area → residual window ghosting.
-            // v25b RedrawWindow: made it WORSE — triggered extra repaints that interfered.
-            //
-            // v25c fix: ShowWindow(SW_MINIMIZE).
-            // SW_MINIMIZE is FUNDAMENTALLY different from SW_HIDE:
-            //   - SW_HIDE: window becomes invisible but DWM may keep compositing cached frame
-            //   - SW_MINIMIZE: window is REMOVED from desktop composition entirely (goes to
-            //     taskbar). DWM must repaint the exposed area — no caching possible.
-            // After minimization, the desktop behind our window is guaranteed clean.
-            NativeMethods.GetWindowRect(_hwnd, out var originalRect);
-            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_MINIMIZE);
-            System.Threading.Thread.Sleep(300); // let DWM fully repaint exposed area
+            // v25d PRIMARY PATH: load the wallpaper FILE directly. No screenshot, no DWM, no
+            // self-capture, no timing races — see LoadWallpaperFrost for the full rationale.
+            raw = LoadWallpaperFrost();
 
-            using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
-            using (var gc = Graphics.FromImage(raw))
+            if (raw == null)
             {
-                gc.CopyFromScreen(originalRect.Left, originalRect.Top, 0, 0, new Size(_winW, _winH));
+                // ---- Legacy screenshot fallback ----
+                // v22 SW_HIDE / v23-v24 ULW-transparent: FAILED (DWM keeps compositing cached frame).
+                // v25 SetWindowPos off-screen: renders but leaves DWM cache residue.
+                // v25b RedrawWindow: made it worse.
+                // Kept only as a safety net if the wallpaper file can't be read.
+                HostLog.Write("FenceLayer.EnsureFrostCapture：壁纸文件不可用，回落截屏");
+                NativeMethods.GetWindowRect(_hwnd, out var originalRect);
+                NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_MINIMIZE);
+                System.Threading.Thread.Sleep(300);
+
+                raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
+                using (var gc = Graphics.FromImage(raw))
+                    gc.CopyFromScreen(originalRect.Left, originalRect.Top, 0, 0, new Size(_winW, _winH));
+
+                NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_RESTORE);
             }
 
-            // Restore — UpdateVisual will push a real frame making the window visible again.
-            NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_RESTORE);
             int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
             var blurred = BoxBlur(raw, radius);
             // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)
             _frostBmp = BoxBlur(BoxBlur(blurred, radius), radius);
             blurred.Dispose();
-            HostLog.Write($"FenceLayer.EnsureFrostCapture：毛玻璃背景已捕获并模糊 size={_winW}x{_winH} radius={radius}");
+            HostLog.Write($"FenceLayer.EnsureFrostCapture：毛玻璃背景已就绪 size={_winW}x{_winH} radius={radius}");
         }
         catch (Exception ex)
         {
             HostLog.Write("FenceLayer.EnsureFrostCapture 失败（回落普通半透明）", ex);
             InvalidateFrost();
+        }
+        finally
+        {
+            raw?.Dispose(); // source is only needed to build the blurred _frostBmp
         }
     }
 
