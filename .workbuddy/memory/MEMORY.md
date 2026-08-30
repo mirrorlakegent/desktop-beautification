@@ -64,8 +64,12 @@
     SW_HIDE 不清除缓存。用户复验：FrostOpacity=0 仍全白、四盒不一致。
   - **v23 毛玻璃（PushTransparentFrame 失败）**：方案方向正确（ULW 全透明帧替代 SW_HIDE），
     但 `new Bitmap()` 未零初始化 → 垃圾 alpha 像素 → 窗口未真正透明 → 仍自捕获。
-  - **v24 毛玻璃（待真机复验）**：修复 Bitmap 零初始化（`Graphics.Clear(Transparent)`）；
-    若通过则毛玻璃自捕获问题彻底结案。发布 ds2（exe Aug 27 21:29）。
+  - **v24 毛玻璃（失败）**：修复 Bitmap 零初始化（`Graphics.Clear(Transparent)`）；
+    用户复验仍不行——证明 PushTransparentFrame 方向在本环境不可行（DWM 不可靠处理 ULW 透明帧）。
+  - **v25 毛玻璃（待真机复验）**：双管齐下根治：
+    ① `FillBodyPixels` 在 frosted 模式填充 alpha=0（透明），消除"先填深色再盖"的 GDI+ 合成依赖；
+    ② `EnsureFrostCapture` 用 `SetWindowPos(-99999,-99999)` 物理移出屏幕替代 PushTransparentFrame，
+    彻底从 DWM 合成中移除窗口再 CopyFromScreen。发布 ds2（exe Aug 29 01:00），提交 `dee9b97`。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
 

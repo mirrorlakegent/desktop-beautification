@@ -2396,7 +2396,14 @@ public sealed class FenceLayer
             uint swpFlags = NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER
                            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOSENDCHANGING;
             NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, -99999, -99999, 0, 0, swpFlags);
-            System.Threading.Thread.Sleep(100); // let DWM remove window from composition
+            System.Threading.Thread.Sleep(200); // let DWM remove window from composition
+
+            // Force the desktop to repaint the exposed area so CopyFromScreen
+            // captures clean wallpaper+icons instead of stale DWM cache artifacts.
+            var desktopHwnd = NativeMethods.GetDesktopWindow();
+            NativeMethods.RedrawWindow(desktopHwnd, IntPtr.Zero, IntPtr.Zero,
+                NativeMethods.RDW_INVALIDATE | NativeMethods.RDW_ALLCHILDREN | NativeMethods.RDW_ERASE | NativeMethods.RDW_UPDATENOW);
+            System.Threading.Thread.Sleep(50); // let the paint complete
 
             using var raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
             using (var gc = Graphics.FromImage(raw))

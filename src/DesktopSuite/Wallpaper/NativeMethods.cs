@@ -77,6 +77,13 @@ internal static class NativeMethods
     public static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
 
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
+    public const uint RDW_INVALIDATE = 0x0001;
+    public const uint RDW_ALLCHILDREN = 0x0080;
+    public const uint RDW_ERASE = 0x0004;
+    public const uint RDW_UPDATENOW = 0x0100;
+
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
 
     public const uint SPI_SETDESKWALLPAPER = 0x0014;
