@@ -189,7 +189,7 @@ public sealed class FenceAppearanceForm : Form
         // ===== 7. 毛玻璃背景 =====
         _frostBox = new CheckBox
         {
-            Text = "毛玻璃背景（实验性，可能卡顿）",
+            Text = "毛玻璃背景（模糊当前桌面壁纸）",
             Left = left,
             Top = y,
             AutoSize = true,
