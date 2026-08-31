@@ -83,6 +83,10 @@
     截屏路径降级为 fallback 安全网。新增虚拟屏幕常量 SM_[XY]VIRTUALSCREEN / SM_C[XY]VIRTUALSCREEN。
     **壁纸更换刷新链路已验证完整**：`WM_SETTINGCHANGE` → `PostMessage(WM_FROST_REFRESH)`
     → `InvalidateFrost()+UpdateVisual()` → 重新读新壁纸文件。提交 `2c3aa09`。
+  - **v25f 毛玻璃（✅ 待复验）**：修复「立即轮换壁纸后毛玻璃不刷新」。根因 = `WallpaperRotator` 内部轮换
+    不触发系统 `WM_SETTINGCHANGE`，毛玻璃缓存 `_frostBmp` 不失效。修复：`WallpaperRotator` 新增
+    `WallpaperApplied` 事件 → `FenceLayer.RequestFrostRefresh()`（PostMessage WM_FROST_REFRESH）→
+    `MainWindow` 订阅桥接。提交 `0608877`。**待用户真机复验：托盘「立即轮换壁纸」→ 毛玻璃背景跟随变化**。
   - **关键教训（毛玻璃）**：当窗口是桌面 WorkerW 子窗口时，任何"隐藏自己再截屏"的方案
     都在与 DWM 缓存搏斗，不可能可靠。正确做法是**不截屏**——直接从数据源（壁纸文件）取内容。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
