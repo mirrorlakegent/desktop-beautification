@@ -87,6 +87,13 @@
     不触发系统 `WM_SETTINGCHANGE`，毛玻璃缓存 `_frostBmp` 不失效。修复：`WallpaperRotator` 新增
     `WallpaperApplied` 事件 → `FenceLayer.RequestFrostRefresh()`（PostMessage WM_FROST_REFRESH）→
     `MainWindow` 订阅桥接。提交 `0608877`。**待用户真机复验：托盘「立即轮换壁纸」→ 毛玻璃背景跟随变化**。
+  - **v25g 毛玻璃（✅ 待复验）**：修复两个真机问题 + 移除截屏 fallback：
+    ① **启动竞态**：构造函数中 rotator 的线程池 Tick 可能先于 EnableFences 完成 →
+       `_fenceLayer` 为 null 时 `WallpaperApplied` 被静默跳过。修复：`_pendingFrostRefresh` 标记，
+       EnableFences 创建层后消费。
+    ② **视频壁纸 + 延迟**：`Image.FromFile(video)` 异常→回落截屏（已知失败）。修复：视频扩展名
+       提前跳过；**彻底移除截屏 fallback**（v22-v25c 全系列失败），改为半透明 body 降级渲染。
+    提交 `2a9914e`。
   - **关键教训（毛玻璃）**：当窗口是桌面 WorkerW 子窗口时，任何"隐藏自己再截屏"的方案
     都在与 DWM 缓存搏斗，不可能可靠。正确做法是**不截屏**——直接从数据源（壁纸文件）取内容。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
