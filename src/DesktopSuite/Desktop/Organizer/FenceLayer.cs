@@ -1661,7 +1661,12 @@ public sealed class FenceLayer
                     using (var clip = new Region(boxPath))
                     {
                         g.SetClip(clip, System.Drawing.Drawing2D.CombineMode.Replace);
-                        g.DrawImage(_frostBmp, 0, 0);
+                        // v25h: _frostBmp is rendered at reduced resolution (1/3) for performance — stretch
+                        // it to fill the full window. HighQualityBicubic keeps the upscale smooth; the blur
+                        // itself hides any upscale artifacts. Positioned at (0,0) so each box's clip shows
+                        // the correct portion of the backdrop.
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(_frostBmp, new Rectangle(0, 0, _winW, _winH));
                         g.ResetClip();
                     }
                     // Apply dark tint over the blurred backdrop. Uses FillRoundedRectWithAlpha
@@ -2554,12 +2559,28 @@ public sealed class FenceLayer
                 return;
             }
 
-            int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel
-            var blurred = BoxBlur(raw, radius);
+            // v25h PERF: blur at REDUCED resolution, then upscale on draw (see DrawBoxes). A frosted
+            // backdrop does not need full-resolution blur — blurring hides the upscale artifacts — and
+            // this cuts cost ~9x at 1/3 scale (3 passes each on 1/9 the pixels). To revert to the old
+            // full-resolution blur, set FROST_BLUR_SCALE = 1.0f (1-line fallback switch).
+            const float FROST_BLUR_SCALE = 1.0f / 3.0f;
+            int workW = Math.Max(1, (int)Math.Round(_winW * FROST_BLUR_SCALE));
+            int workH = Math.Max(1, (int)Math.Round(_winH * FROST_BLUR_SCALE));
+            int radius = (int)Math.Round(20 * _dpiX);                 // ~20 logical px blur (window space)
+            int workRadius = Math.Max(1, (int)Math.Round(radius * FROST_BLUR_SCALE));
+
+            using var work = new Bitmap(workW, workH, PixelFormat.Format32bppArgb);
+            using (var wg = Graphics.FromImage(work))
+            {
+                wg.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                wg.DrawImage(raw, new Rectangle(0, 0, workW, workH));
+            }
+
+            var blurred = BoxBlur(work, workRadius);
             // Triple-pass for Gaussian-like quality (box blur × 3 ≈ Gaussian)
-            _frostBmp = BoxBlur(BoxBlur(blurred, radius), radius);
+            _frostBmp = BoxBlur(BoxBlur(blurred, workRadius), workRadius);
             blurred.Dispose();
-            HostLog.Write($"FenceLayer.EnsureFrostCapture：毛玻璃背景已就绪 size={_winW}x{_winH} radius={radius}");
+            HostLog.Write($"FenceLayer.EnsureFrostCapture：毛玻璃背景已就绪 size={workW}x{workH}(1/3缩放) radius={workRadius}");
         }
         catch (Exception ex)
         {
