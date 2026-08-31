@@ -57,6 +57,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         ThemeService.Current.ThemeChanged += OnThemeChanged;
 
+        // Route B: ensure built-in appearance presets exist on first run (idempotent).
+        try { FencePresetStore.SeedDefaults(); } catch { }
+
         // Restore last session's preferences and re-adopt a wallpaper that is still running
         // after the app was closed (the renderer is intentionally detached from this process).
         ChkAudio.IsChecked = _settings.AudioEnabled;
@@ -1072,12 +1075,47 @@ public partial class MainWindow : Window
                 HostLog.Write("ShowAppearanceForm：用户取消，回落到原外观。");
             }
         }
-        catch (Exception ex)
-        {
-            HostLog.Write("打开外观设置失败", ex);
-            MessageBox.Show($"打开外观设置失败：{ex.Message}", "外观设置", MessageBoxButton.OK, MessageBoxImage.Error);
+            catch (Exception ex)
+            {
+                HostLog.Write("打开外观设置失败", ex);
+                MessageBox.Show($"打开外观设置失败：{ex.Message}", "外观设置", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
-    }
+
+        /// <summary>Route B: apply a named appearance preset immediately (persisted to settings).</summary>
+        public void ApplyAppearancePreset(string name)
+        {
+            try
+            {
+                var a = FencePresetStore.Load(name);
+                if (a == null) return;
+                a.ApplyTo(_settings);
+                _settings.Save();
+                _fenceLayer?.SetAppearance(a);
+                HostLog.Write($"ApplyAppearancePreset：已应用预设「{name}」");
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write($"应用外观预设「{name}」失败", ex);
+            }
+        }
+
+        /// <summary>Route B: prompt for a name and save the current live appearance as a preset.</summary>
+        public void SaveAppearancePresetInteractive()
+        {
+            try
+            {
+                var name = InputBox.Show("保存外观预设", "预设名称：", "我的预设");
+                if (string.IsNullOrWhiteSpace(name)) return;
+                var current = FenceAppearance.FromSettings(_settings);
+                FencePresetStore.Save(name, current);
+                HostLog.Write($"SaveAppearancePreset：已保存预设「{name}」");
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("保存外观预设失败", ex);
+            }
+        }
 
     /// <summary>Re-enable fences on startup (off the UI thread, with backoff) when the last session
     /// left them active. Mirrors <see cref="ApplyIconsWithRetry"/>; if the native icons cannot be

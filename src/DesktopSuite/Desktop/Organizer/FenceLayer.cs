@@ -1628,10 +1628,11 @@ public sealed class FenceLayer
         // is the blurred desktop backdrop (drawn per-box, clipped) instead of the flat dark fill.
         var titleAlign = _appearance.TitleAlign == 1 ? StringAlignment.Center : StringAlignment.Near;
         // Border alpha scales with body opacity so a near-transparent box doesn't keep a hard frame.
+        // (The actual Pen is built per-box below; declared here only for the skip-threshold guard.)
         int borderA = Math.Min(160, (int)(_appearance.BodyOpacity * 160 / 180.0));
-        using var borderPen = new Pen(Color.FromArgb(borderA, 64, 70, 86), 1);     // scales 0→160 with body
         using var itemBrush = new SolidBrush(Color.FromArgb(235, 210, 214, 222));  // mostly opaque text
-        using var titleFont = new Font("Segoe UI", (float)(_appearance.TitleFontSize * _dpiY), FontStyle.Bold);
+        // Route B (字体选择): title font family is whitelist-validated at load; default "Segoe UI".
+        using var titleFont = new Font(_appearance.TitleFontFamily, (float)(_appearance.TitleFontSize * _dpiY), FontStyle.Bold);
         using var itemFont = new Font("Segoe UI", (float)(9 * _dpiY), FontStyle.Regular);
         using var sf = new StringFormat(StringFormatFlags.NoWrap)
         {
@@ -1646,6 +1647,12 @@ public sealed class FenceLayer
             int w = b.Right - b.Left;
             int h = b.Bottom - b.Top;
             if (w <= 0 || h <= 0) continue;
+
+            // Route B (盒阴影): drawn BEFORE the body, offset down-right, using its own temp bitmap +
+            // BoxBlur + a ColorMatrix that tints by the blurred intensity (RGB channel). Completely
+            // isolated from the body alpha pipeline — never touches FillBodyPixels / CreateDIBSection.
+            if (_appearance.BoxShadowEnabled)
+                DrawBoxShadow(g, b.Left, b.Top, w, h, r);
 
             // Body + header.
             // v13: Body background is filled by FillBodyPixels (LockBits, before Graphics.FromImage)
@@ -1827,8 +1834,15 @@ public sealed class FenceLayer
                 // (matches "near-transparent box fades its frame" intent). CreateDIBSection preserves
                 // the alpha channel exactly, but the pen garbage is introduced by GDI+ itself, so this
                 // guard must stay.
-                if (borderA >= 16)
+                // Route B (边框色): when the user enabled a custom border (BorderOpacity>=16), draw with
+                // the chosen color+opacity; otherwise keep the legacy auto-scale grey border.
+                int effBorderA = _appearance.BorderOpacity >= 16 ? _appearance.BorderOpacity : borderA;
+                if (effBorderA >= 16)
                 {
+                    Color bc = _appearance.BorderOpacity >= 16
+                        ? Color.FromArgb(effBorderA, _appearance.BorderColorR, _appearance.BorderColorG, _appearance.BorderColorB)
+                        : Color.FromArgb(effBorderA, 64, 70, 86);
+                    using var borderPen = new Pen(bc, 1);
                     g.DrawPath(borderPen, borderPath);
                 }
             }
@@ -2530,6 +2544,53 @@ public sealed class FenceLayer
             if (comObj != null && Marshal.IsComObject(comObj))
                 Marshal.ReleaseComObject(comObj);
         }
+    }
+
+    /// <summary>Route B: draw a soft drop shadow behind a fence box. Builds a white rounded-rect mask,
+    /// blurs it with the shared <see cref="BoxBlur"/> (which forces alpha to 255, so the blurred RGB
+    /// channel carries the intensity), then composites it tinted via a ColorMatrix that sets A' from the
+    /// mask intensity and RGB' to the chosen shadow color (the border color doubles as the shadow tint).
+    /// Drawn before the box body, offset down-right; fully isolated from the body alpha pipeline
+    /// (never touches FillBodyPixels / CreateDIBSection), so it cannot reintroduce the v13 white-alpha bug.</summary>
+    private void DrawBoxShadow(Graphics g, int left, int top, int w, int h, int r)
+    {
+        int blur = (int)Math.Round(_appearance.ShadowBlur * _dpiX);
+        if (blur < 1) blur = 1;
+        int margin = blur + 4;                                   // room for the blur to bleed outside the box
+        int ox = (int)Math.Round(_appearance.ShadowOffset * _dpiX);
+        int oy = (int)Math.Round(_appearance.ShadowOffset * _dpiY);
+        int mw = w + margin * 2;
+        int mh = h + margin * 2;
+
+        using var mask = new Bitmap(mw, mh, PixelFormat.Format32bppArgb);
+        using (var mg = Graphics.FromImage(mask))
+        {
+            mg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = RoundedRectPath(margin, margin, w, h, r);
+            using var brush = new SolidBrush(Color.White);
+            mg.FillPath(brush, path);
+        }
+
+        using var blurred = BoxBlur(mask, blur);
+
+        // ColorMatrix rows = output channels [R,G,B,A,W]; cols = input [R,G,B,A,W].
+        // R'/G'/B' = constant shadow color (from the border color); A' = (ShadowOpacity/255) * mask intensity.
+        // Mask is white (RGB=255) blurred → RGB = intensity, A=255 (BoxBlur forces A=255).
+        float s = _appearance.ShadowOpacity / 255f;
+        var cm = new ColorMatrix(new float[][]
+        {
+            new float[] { 0, 0, 0, 0, _appearance.BorderColorR / 255f },
+            new float[] { 0, 0, 0, 0, _appearance.BorderColorG / 255f },
+            new float[] { 0, 0, 0, 0, _appearance.BorderColorB / 255f },
+            new float[] { s, 0, 0, 0, 0 },
+            new float[] { 0, 0, 0, 0, 1 }
+        });
+        using var ia = new ImageAttributes();
+        ia.SetColorMatrix(cm);
+
+        g.DrawImage(blurred,
+            new Rectangle(left - margin + ox, top - margin + oy, mw, mh),
+            0, 0, mw, mh, GraphicsUnit.Pixel, ia);
     }
 
     /// <summary>M4-B frosted glass: load the current wallpaper, blur it, and cache as _frostBmp.

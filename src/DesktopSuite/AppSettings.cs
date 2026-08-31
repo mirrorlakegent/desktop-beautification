@@ -63,6 +63,25 @@ public sealed class AppSettings
     public bool FenceFrosted { get; set; } = false;
     /// <summary>Frosted glass tint opacity (0-255). Lower = more transparent.</summary>
     public int FenceFrostOpacity { get; set; } = 50;
+    // ---- M4-B Route B: appearance deepening ----
+    /// <summary>Box drop shadow enabled.</summary>
+    public bool FenceBoxShadowEnabled { get; set; }
+    /// <summary>Shadow offset in logical px (applied down-right).</summary>
+    public int FenceShadowOffset { get; set; } = 6;
+    /// <summary>Shadow blur radius in logical px.</summary>
+    public int FenceShadowBlur { get; set; } = 12;
+    /// <summary>Shadow opacity (0-255).</summary>
+    public int FenceShadowOpacity { get; set; } = 90;
+    /// <summary>Custom border color R (0-255). Also the box-shadow tint.</summary>
+    public int FenceBorderColorR { get; set; } = 64;
+    /// <summary>Custom border color G (0-255).</summary>
+    public int FenceBorderColorG { get; set; } = 70;
+    /// <summary>Custom border color B (0-255).</summary>
+    public int FenceBorderColorB { get; set; } = 86;
+    /// <summary>Custom border opacity (0-255). 0 = auto (legacy). ≥16 = custom color.</summary>
+    public int FenceBorderOpacity { get; set; }
+    /// <summary>Title font family (whitelist-enforced).</summary>
+    public string FenceTitleFontFamily { get; set; } = "Segoe UI";
 
     private static readonly string FilePath =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -87,6 +106,17 @@ public sealed class AppSettings
                     loaded.FenceTitleFontSize =  Math.Clamp((int)loaded.FenceTitleFontSize, 8, 28);
                     loaded.FenceTitleAlign =     Math.Clamp(loaded.FenceTitleAlign,     0, 1);
                     loaded.FenceFrostOpacity =   Math.Clamp(loaded.FenceFrostOpacity,   0, 200);
+                    loaded.FenceShadowOffset =   Math.Clamp(loaded.FenceShadowOffset,   0, 40);
+                    loaded.FenceShadowBlur =     Math.Clamp(loaded.FenceShadowBlur,     0, 40);
+                    loaded.FenceShadowOpacity =  Math.Clamp(loaded.FenceShadowOpacity,  0, 255);
+                    loaded.FenceBorderColorR =   Math.Clamp(loaded.FenceBorderColorR,   0, 255);
+                    loaded.FenceBorderColorG =   Math.Clamp(loaded.FenceBorderColorG,   0, 255);
+                    loaded.FenceBorderColorB =   Math.Clamp(loaded.FenceBorderColorB,   0, 255);
+                    loaded.FenceBorderOpacity =  Math.Clamp(loaded.FenceBorderOpacity,  0, 255);
+                    // Title font family must be on the whitelist — an unknown family would make
+                    // `new Font(family,...)` throw at render time. Clamp to default if not allowed.
+                    if (!FenceAppearance.IsFontFamilyAllowed(loaded.FenceTitleFontFamily))
+                        loaded.FenceTitleFontFamily = "Segoe UI";
                     return loaded;
                 }
 

@@ -21,6 +21,7 @@ public sealed class TrayManager : IDisposable
     private readonly ToolStripMenuItem _iconItem;
     private readonly ToolStripMenuItem _undoItem;
     private readonly ToolStripMenuItem _arrowItem;
+    private readonly ToolStripMenuItem _presetMenu;
     private readonly MainWindow _owner;
     private readonly WallpaperEngine _wallpaper;
     private readonly AppSettings _settings;
@@ -83,6 +84,12 @@ public sealed class TrayManager : IDisposable
 
         // M4-B: fence box appearance customization.
         menu.Items.Add(new ToolStripMenuItem("🎨 外观…", null, (_, _) => _owner.ShowAppearanceForm()));
+
+        // M4-B Route B: named appearance presets (seed + load/save via FencePresetStore).
+        _presetMenu = new ToolStripMenuItem("🎨 外观预设");
+        _presetMenu.DropDownOpening += (_, _) => RebuildPresetMenu();
+        RebuildPresetMenu();
+        menu.Items.Add(_presetMenu);
 
         _arrowItem = new ToolStripMenuItem("🚫 隐藏快捷方式箭头：关");
         _arrowItem.Click += (_, _) => _owner.ToggleHideShortcutArrows();
@@ -172,6 +179,22 @@ public sealed class TrayManager : IDisposable
         bool can = _owner.CanUndoFenceCategoryDelete;
         _undoItem.Enabled = can;
         _undoItem.Text = can ? $"↩ 撤销删除分类「{_owner.PendingUndoCategoryName}」" : "↩ 撤销删除分类";
+    }
+
+    /// <summary>Rebuild the appearance-preset submenu from disk. Called on dropdown-open so newly
+    /// saved presets appear without restarting the app.</summary>
+    private void RebuildPresetMenu()
+    {
+        _presetMenu.DropDownItems.Clear();
+        foreach (var name in FencePresetStore.List())
+        {
+            var presetName = name!;   // List() returns non-null names
+            _presetMenu.DropDownItems.Add(new ToolStripMenuItem(presetName, null,
+                (_, _) => _owner.ApplyAppearancePreset(presetName)));
+        }
+        _presetMenu.DropDownItems.Add(new ToolStripSeparator());
+        _presetMenu.DropDownItems.Add(new ToolStripMenuItem("💾 保存当前为预设…", null,
+            (_, _) => _owner.SaveAppearancePresetInteractive()));
     }
 
     private void ShowVolumeForm()

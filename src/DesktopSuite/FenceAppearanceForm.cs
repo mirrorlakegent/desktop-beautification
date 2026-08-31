@@ -33,6 +33,26 @@ public sealed class FenceAppearanceForm : Form
     private readonly TrackBar _frostOpacityTrack;
     private Label? _frostOpacityVal;
 
+    // Route B controls
+    private readonly CheckBox _shadowBox;
+    private readonly TrackBar _shadowOffTrack;
+    private Label? _shadowOffVal;
+    private readonly TrackBar _shadowBlurTrack;
+    private Label? _shadowBlurVal;
+    private readonly TrackBar _shadowOpTrack;
+    private Label? _shadowOpVal;
+    private readonly CheckBox _borderBox;
+    private readonly TrackBar _borderRTrack;
+    private Label? _borderRVal;
+    private readonly TrackBar _borderGTrack;
+    private Label? _borderGVal;
+    private readonly TrackBar _borderBTrack;
+    private Label? _borderBVal;
+    private readonly TrackBar _borderOpTrack;
+    private Label? _borderOpVal;
+    private readonly ComboBox _fontBox;
+    private readonly ComboBox _presetBox;
+
     // DWM dark title bar
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
     [DllImport("dwmapi.dll", PreserveSig = true)]
@@ -206,6 +226,112 @@ public sealed class FenceAppearanceForm : Form
         AddLabel("毛玻璃着色（越小越透）");
         _frostOpacityTrack = AddTrack(0, 200, _appearance.FrostOpacity, out _);
         AddVal(ref _frostOpacityVal, $"{_appearance.FrostOpacity}", _frostOpacityTrack.Top);
+        Skip(16);
+
+        // ===== 8b. 盒阴影 =====
+        _shadowBox = new CheckBox
+        {
+            Text = "盒阴影（在盒外绘制柔和投影）",
+            Left = left, Top = y, AutoSize = true, Checked = _appearance.BoxShadowEnabled,
+            ForeColor = Color.FromArgb(255, 220, 224, 232), UseCompatibleTextRendering = true
+        };
+        _shadowBox.CheckedChanged += (_, _) => Fire();
+        panel.Controls.Add(_shadowBox);
+        y = _shadowBox.Bottom + 4;
+        Skip(4);
+
+        AddLabel("阴影偏移（px）");
+        _shadowOffTrack = AddTrack(0, 40, _appearance.ShadowOffset, out _);
+        AddVal(ref _shadowOffVal, $"{_appearance.ShadowOffset}", _shadowOffTrack.Top);
+        Skip(4);
+        AddLabel("阴影模糊（px）");
+        _shadowBlurTrack = AddTrack(0, 40, _appearance.ShadowBlur, out _);
+        AddVal(ref _shadowBlurVal, $"{_appearance.ShadowBlur}", _shadowBlurTrack.Top);
+        Skip(4);
+        AddLabel("阴影不透明度");
+        _shadowOpTrack = AddTrack(0, 255, _appearance.ShadowOpacity, out _);
+        AddVal(ref _shadowOpVal, $"{_appearance.ShadowOpacity}", _shadowOpTrack.Top);
+        Skip(16);
+
+        // ===== 8c. 边框色 =====
+        _borderBox = new CheckBox
+        {
+            Text = "自定义边框色（取消则沿用随主体透明的默认边框）",
+            Left = left, Top = y, AutoSize = true, Checked = _appearance.BorderOpacity >= 16,
+            ForeColor = Color.FromArgb(255, 220, 224, 232), UseCompatibleTextRendering = true
+        };
+        _borderBox.CheckedChanged += (_, _) =>
+        {
+            // Sync the opacity slider; its ValueChanged handler updates the label and calls Fire().
+            _borderOpTrack.Value = _borderBox.Checked ? 140 : 0;
+        };
+        panel.Controls.Add(_borderBox);
+        y = _borderBox.Bottom + 4;
+        Skip(4);
+        AddLabel("边框红 (R)");
+        _borderRTrack = AddTrack(0, 255, _appearance.BorderColorR, out _);
+        AddVal(ref _borderRVal, $"{_appearance.BorderColorR}", _borderRTrack.Top);
+        Skip(4);
+        AddLabel("边框绿 (G)");
+        _borderGTrack = AddTrack(0, 255, _appearance.BorderColorG, out _);
+        AddVal(ref _borderGVal, $"{_appearance.BorderColorG}", _borderGTrack.Top);
+        Skip(4);
+        AddLabel("边框蓝 (B)");
+        _borderBTrack = AddTrack(0, 255, _appearance.BorderColorB, out _);
+        AddVal(ref _borderBVal, $"{_appearance.BorderColorB}", _borderBTrack.Top);
+        Skip(4);
+        AddLabel("边框不透明度");
+        _borderOpTrack = AddTrack(0, 255, _appearance.BorderOpacity, out _);
+        AddVal(ref _borderOpVal, $"{_appearance.BorderOpacity}", _borderOpTrack.Top);
+        Skip(16);
+
+        // ===== 8d. 标题字体 =====
+        AddLabel("标题字体");
+        _fontBox = new ComboBox
+        {
+            Left = left, Top = y, Width = 320, DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = Color.FromArgb(255, 40, 44, 54), ForeColor = Color.FromArgb(255, 220, 224, 232)
+        };
+        foreach (var f in FenceAppearance.AllowedFontFamilies.OrderBy(x => x))
+            _fontBox.Items.Add(f);
+        _fontBox.SelectedItem = FenceAppearance.IsFontFamilyAllowed(_appearance.TitleFontFamily)
+            ? _appearance.TitleFontFamily : "Segoe UI";
+        _fontBox.SelectedIndexChanged += (_, _) => Fire();
+        panel.Controls.Add(_fontBox);
+        y = _fontBox.Bottom + 4;
+        Skip(16);
+
+        // ===== 8e. 外观预设 =====
+        AddLabel("外观预设（选择即实时预览）");
+        _presetBox = new ComboBox
+        {
+            Left = left, Top = y, Width = 240, DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor = Color.FromArgb(255, 40, 44, 54), ForeColor = Color.FromArgb(255, 220, 224, 232)
+        };
+        foreach (var n in FencePresetStore.List()) _presetBox.Items.Add(n);
+        if (_presetBox.Items.Count > 0) _presetBox.SelectedIndex = 0;
+        _presetBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (_presetBox.SelectedItem is string name)
+            {
+                var a = FencePresetStore.Load(name);
+                if (a != null) _onPreview?.Invoke(a.Clone());
+            }
+        };
+        panel.Controls.Add(_presetBox);
+        var savePresetBtn = new Button
+        {
+            Text = "保存为预设…", Left = left + 250, Top = y, Width = 110, Height = _presetBox.Height,
+            BackColor = Color.FromArgb(255, 40, 120, 200), ForeColor = Color.White
+        };
+        savePresetBtn.Click += (_, _) =>
+        {
+            var name = InputBox.Show("保存外观预设", "预设名称：", "我的预设");
+            if (!string.IsNullOrWhiteSpace(name))
+                FencePresetStore.Save(name, _appearance.Clone());
+        };
+        panel.Controls.Add(savePresetBtn);
+        y = _presetBox.Bottom + 4;
         Skip(20);
 
         // ===== 9. 按钮 =====
@@ -252,6 +378,13 @@ public sealed class FenceAppearanceForm : Form
         _headerTrack.ValueChanged += (_, _) => { _headerVal!.Text = $"{_headerTrack.Value}"; Fire(); };
         _fontTrack.ValueChanged += (_, _) => { _fontVal!.Text = $"{_fontTrack.Value} px"; Fire(); };
         _frostOpacityTrack.ValueChanged += (_, _) => { _frostOpacityVal!.Text = $"{_frostOpacityTrack.Value}"; Fire(); };
+        _shadowOffTrack.ValueChanged += (_, _) => { _shadowOffVal!.Text = $"{_shadowOffTrack.Value}"; Fire(); };
+        _shadowBlurTrack.ValueChanged += (_, _) => { _shadowBlurVal!.Text = $"{_shadowBlurTrack.Value}"; Fire(); };
+        _shadowOpTrack.ValueChanged += (_, _) => { _shadowOpVal!.Text = $"{_shadowOpTrack.Value}"; Fire(); };
+        _borderRTrack.ValueChanged += (_, _) => { _borderRVal!.Text = $"{_borderRTrack.Value}"; Fire(); };
+        _borderGTrack.ValueChanged += (_, _) => { _borderGVal!.Text = $"{_borderGTrack.Value}"; Fire(); };
+        _borderBTrack.ValueChanged += (_, _) => { _borderBVal!.Text = $"{_borderBTrack.Value}"; Fire(); };
+        _borderOpTrack.ValueChanged += (_, _) => { _borderOpVal!.Text = $"{_borderOpTrack.Value}"; Fire(); };
 
         UpdateFrostEnabled();
         _ready = true;
@@ -282,6 +415,15 @@ public sealed class FenceAppearanceForm : Form
         _appearance.ShowGlyph = _glyphBox.Checked;
         _appearance.Frosted = _frostBox.Checked;
         _appearance.FrostOpacity = _frostOpacityTrack.Value;
+        _appearance.BoxShadowEnabled = _shadowBox.Checked;
+        _appearance.ShadowOffset = _shadowOffTrack.Value;
+        _appearance.ShadowBlur = _shadowBlurTrack.Value;
+        _appearance.ShadowOpacity = _shadowOpTrack.Value;
+        _appearance.BorderColorR = _borderRTrack.Value;
+        _appearance.BorderColorG = _borderGTrack.Value;
+        _appearance.BorderColorB = _borderBTrack.Value;
+        _appearance.BorderOpacity = _borderOpTrack.Value;
+        _appearance.TitleFontFamily = _fontBox.SelectedItem as string ?? "Segoe UI";
         _onPreview?.Invoke(_appearance.Clone());
     }
 }
