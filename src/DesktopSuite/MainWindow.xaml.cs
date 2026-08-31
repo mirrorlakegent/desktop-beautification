@@ -66,6 +66,10 @@ public partial class MainWindow : Window
         // immediately (off the UI thread) and keeps the wallpaper in sync with the current period.
         _rotator = new WallpaperRotator(_wallpaper, _settings);
         _rotator.StatusChanged += OnRotatorStatus;
+        // When DesktopSuite rotates its own wallpaper (tray "立即轮换壁纸" / timed rotation), the
+        // frosted-glass FenceLayer backdrop must re-load too — the system WM_SETTINGCHANGE broadcast
+        // is NOT raised for DesktopSuite's internal mpv/static rotation, so we bridge it here.
+        _rotator.WallpaperApplied += _ => _fenceLayer?.RequestFrostRefresh();
         ChkRotation.IsChecked = _settings.RotationEnabled;
         ChkLaunchOnBoot.IsChecked = _settings.LaunchOnStartup;
         IntervalSlider.Value = Math.Clamp(_settings.RotationIntervalMinutes, 5, 120);

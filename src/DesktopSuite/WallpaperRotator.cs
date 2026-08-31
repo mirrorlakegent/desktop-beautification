@@ -47,6 +47,12 @@ public sealed class WallpaperRotator : IDisposable
 
     public event Action<string>? StatusChanged;
 
+    /// <summary>Fired after a *new* wallpaper media has actually been applied (LastMedia written + saved).
+    /// Used by DesktopSuite's interior surfaces (e.g. the frosted-glass FenceLayer backdrop) to drop
+    /// their cached wallpaper and re-load the new one. Fires only on a real change — not on the
+    /// "same file still playing" / "period has no wallpaper" / failure early-returns.</summary>
+    public event Action<string>? WallpaperApplied;
+
     public WallpaperRotator(WallpaperEngine engine, AppSettings settings)
     {
         _engine = engine;
@@ -140,6 +146,9 @@ public sealed class WallpaperRotator : IDisposable
                 _settings.Save();
                 _lastApplied = file;
                 StatusChanged?.Invoke($"时段「{period}」→ {Path.GetFileName(file)}");
+                // Notify interior surfaces (frosted-glass FenceLayer) so their cached wallpaper
+                // backdrop is invalidated and re-loaded from the freshly-saved LastMedia.
+                WallpaperApplied?.Invoke(file);
             }
             catch (Exception ex)
             {

@@ -653,6 +653,16 @@ public sealed class FenceLayer
         }
     }
 
+    /// <summary>Ask the fence window to drop its cached frosted backdrop and re-load the current
+    /// DesktopSuite wallpaper. Thread-safe: posts <see cref="WM_FROST_REFRESH"/> to the window's owner
+    /// thread (same path as the system wallpaper-change listener). No-op when frosted mode is off or the
+    /// window is not yet created. Safe to call from any thread — e.g. the WallpaperRotator pool thread.</summary>
+    public void RequestFrostRefresh()
+    {
+        if (_hwnd != IntPtr.Zero)
+            FenceNative.PostMessage(_hwnd, WM_FROST_REFRESH, IntPtr.Zero, IntPtr.Zero);
+    }
+
     private void UnhookSystemEvents()
     {
         if (_frostListenerHwnd != IntPtr.Zero)

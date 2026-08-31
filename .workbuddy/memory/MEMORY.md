@@ -74,10 +74,11 @@
     用户复验"还不如上一版本"——RedrawWindow 触发额外重绘反成干扰。提交 `2678d53`。
   - **v25c（未复验即弃）**：`SW_MINIMIZE`。预判失效——本窗口是 WorkerW **子窗口**，
     无标准最小化行为，`SW_MINIMIZE` 大概率不生效。提交 `85e95cd`。
-  - **v25d 毛玻璃（✅ 架构性换路线，待复验）**：**彻底放弃截屏**。新增 `LoadWallpaperFrost()`
-    用 `IDesktopWallpaper` COM（项目本就有此接口）直接读壁纸文件，按 `DESKTOP_WALLPAPER_POSITION`
-    （FILL/FIT/STRETCH/CENTER/TILE）换算缩放 + 虚拟屏幕位置映射裁剪，再三重盒式模糊。
-    **零窗口操作 / 零 DWM 依赖 / 零时序竞争 / 零反馈循环**。
+  - **v25d 毛玻璃（✅ 无残留/四盒一致，但壁纸源错）**：用户复验渲染质量达标，但背景是 Windows 默认
+    Bloom 而非 DesktopSuite 轮换壁纸。根因：`GetWallpaper()` 只知系统级静态壁纸。提交 `2c3aa09`。
+  - **v25e 毛玻璃（✅ 待复验）**：`LoadWallpaperFrost()` 优先级取壁纸源：
+    ① `AppSettings.LastMedia`（DesktopSuite 自身当前壁纸，覆盖 static+dynamic，写于 `WallpaperRotator`）
+    → ② `IDesktopWallpaper.GetWallpaper()`（系统兜底）→ ③ 截屏兜底。提交 `d4766b2`。
     取舍：不含桌面图标（对毛玻璃观感更贴合真实——真实毛玻璃模糊的是背景本身而非其上物体）。
     截屏路径降级为 fallback 安全网。新增虚拟屏幕常量 SM_[XY]VIRTUALSCREEN / SM_C[XY]VIRTUALSCREEN。
     **壁纸更换刷新链路已验证完整**：`WM_SETTINGCHANGE` → `PostMessage(WM_FROST_REFRESH)`
