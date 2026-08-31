@@ -2442,6 +2442,18 @@ public sealed class FenceLayer
                 return null;
             }
 
+            // v25g: Video files (.mp4, .mkv, etc.) cannot be loaded by Image.FromFile — they would
+            // throw and fall through to the broken screenshot fallback (DWM self-capture residue).
+            // Skip gracefully: return null so the caller keeps the existing _frostBmp cache or renders
+            // the semi-transparent body fallback. The frosted backdrop will refresh on the next
+            // image-based wallpaper rotation.
+            var ext = Path.GetExtension(path)?.ToLowerInvariant();
+            if (ext is ".mp4" or ".mkv" or ".mov" or ".webm" or ".avi")
+            {
+                HostLog.Write($"LoadWallpaperFrost：跳过视频壁纸 {Path.GetFileName(path)}（无法从视频提取静态帧，保留现有毛玻璃缓存）");
+                return null;
+            }
+
             // Get wallpaper position mode. If we have a COM handle, ask it; otherwise
             // default to FILL (the most common setting on modern Windows).
             var pos = NativeMethods.DESKTOP_WALLPAPER_POSITION.DWPOS_FILL;
@@ -2515,11 +2527,10 @@ public sealed class FenceLayer
         }
     }
 
-    /// <summary>M4-B frosted glass: capture the desktop region directly behind the fence window and
-    /// blur it, so a semi-transparent box reveals a frosted backdrop instead of flat dark. The capture
-    /// is cached for the whole Frosted session and reused across repaints (and during drag) — only
+    /// <summary>M4-B frosted glass: load the current wallpaper, blur it, and cache as _frostBmp.
+    /// The capture is cached for the whole Frosted session and reused across repaints (and during drag) — only
     /// re-captured on DPI/display change or when Frosted is (re)enabled, so it cannot run away into a
-    /// feedback loop. Falls back silently (no backdrop) if the screen grab fails.</summary>
+    /// feedback loop. Degrades silently (no backdrop, semi-transparent body) if the wallpaper can't be loaded.</summary>
     private void EnsureFrostCapture()
     {
         if (!_appearance.Frosted) { InvalidateFrost(); return; }
@@ -2532,23 +2543,15 @@ public sealed class FenceLayer
             // self-capture, no timing races — see LoadWallpaperFrost for the full rationale.
             raw = LoadWallpaperFrost();
 
+            // v25g: Removed screenshot fallback (v22-v25c all failed due to DWM self-capture on
+            // WorkerW child windows). If LoadWallpaperFrost returns null (video wallpaper / file
+            // missing / corrupt), _frostBmp stays null and DrawBoxes renders the semi-transparent
+            // body fallback (else-if _appearance.Frosted branch). This is a clean degradation:
+            // boxes still look good, just without the blurred backdrop.
             if (raw == null)
             {
-                // ---- Legacy screenshot fallback ----
-                // v22 SW_HIDE / v23-v24 ULW-transparent: FAILED (DWM keeps compositing cached frame).
-                // v25 SetWindowPos off-screen: renders but leaves DWM cache residue.
-                // v25b RedrawWindow: made it worse.
-                // Kept only as a safety net if the wallpaper file can't be read.
-                HostLog.Write("FenceLayer.EnsureFrostCapture：壁纸文件不可用，回落截屏");
-                NativeMethods.GetWindowRect(_hwnd, out var originalRect);
-                NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_MINIMIZE);
-                System.Threading.Thread.Sleep(300);
-
-                raw = new Bitmap(_winW, _winH, PixelFormat.Format32bppArgb);
-                using (var gc = Graphics.FromImage(raw))
-                    gc.CopyFromScreen(originalRect.Left, originalRect.Top, 0, 0, new Size(_winW, _winH));
-
-                NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_RESTORE);
+                HostLog.Write("FenceLayer.EnsureFrostCapture：壁纸文件不可用（可能是视频壁纸或文件缺失），毛玻璃降级为半透明模式");
+                return;
             }
 
             int radius = (int)Math.Round(20 * _dpiX); // ~20 logical px blur kernel

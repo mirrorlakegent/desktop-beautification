@@ -35,6 +35,9 @@ public partial class MainWindow : Window
     private bool _suppressRotationEvents;
     private bool _suppressAudioEvents;
     private bool _shuttingDown;
+    /// <summary>Latch: WallpaperApplied fired before _fenceLayer was created (startup race).
+    /// Consumed by EnableFences() to request an immediate frost refresh after the layer is ready.</summary>
+    private bool _pendingFrostRefresh;
     private ResolvedTheme? _lastTheme;
 
     /// <summary>0/1 latch so OnClosed and SessionEnding cannot both run the exit icon restore (P1-2).</summary>
@@ -69,7 +72,15 @@ public partial class MainWindow : Window
         // When DesktopSuite rotates its own wallpaper (tray "立即轮换壁纸" / timed rotation), the
         // frosted-glass FenceLayer backdrop must re-load too — the system WM_SETTINGCHANGE broadcast
         // is NOT raised for DesktopSuite's internal mpv/static rotation, so we bridge it here.
-        _rotator.WallpaperApplied += _ => _fenceLayer?.RequestFrostRefresh();
+        // If _fenceLayer hasn't been created yet (startup race: rotator Tick completes before
+        // EnableFences), latch the request and apply it once the layer exists.
+        _rotator.WallpaperApplied += _ =>
+        {
+            if (_fenceLayer != null)
+                _fenceLayer.RequestFrostRefresh();
+            else
+                _pendingFrostRefresh = true;
+        };
         ChkRotation.IsChecked = _settings.RotationEnabled;
         ChkLaunchOnBoot.IsChecked = _settings.LaunchOnStartup;
         IntervalSlider.Value = Math.Clamp(_settings.RotationIntervalMinutes, 5, 120);
@@ -923,6 +934,15 @@ public partial class MainWindow : Window
         _fenceLayer.Show(items.ToArray(), layout);
         _fenceLayer.SetAppearance(FenceAppearance.FromSettings(_settings));
         _fenceLayer.UndoStateChanged += () => _tray?.RefreshUndoItem();
+        // v25g: If the rotator already rotated the wallpaper before we created the fence layer
+        // (startup race — Tick on ThreadPool completed before EnableFences), apply the latched
+        // frost refresh now so the backdrop shows the current wallpaper, not the stale one.
+        if (_pendingFrostRefresh && _settings.FenceFrosted)
+        {
+            _fenceLayer.RequestFrostRefresh();
+            _pendingFrostRefresh = false;
+            HostLog.Write("EnableFences：应用启动期间积压的毛玻璃刷新请求。");
+        }
         HostLog.Write("EnableFences：_fenceLayer.Show 已调用（窗口创建结果见 FenceLayer 日志）。");
         layout.FencesEnabled = true;
         _fenceStore.Save(layout);
