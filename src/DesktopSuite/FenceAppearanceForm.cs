@@ -15,9 +15,10 @@ namespace DesktopSuite;
 /// </summary>
 public sealed class FenceAppearanceForm : Form
 {
-    private readonly FenceAppearance _appearance;
+    private FenceAppearance _appearance;
     private readonly Action<FenceAppearance> _onPreview;
     private bool _ready;
+    private bool _syncing;   // guard: suppress the border-check handler while we sync controls from a preset
 
     private readonly TrackBar _cornerTrack;
     private Label? _cornerVal;
@@ -262,6 +263,7 @@ public sealed class FenceAppearanceForm : Form
         };
         _borderBox.CheckedChanged += (_, _) =>
         {
+            if (_syncing) return;   // don't fight SyncControlsFromAppearance
             // Sync the opacity slider; its ValueChanged handler updates the label and calls Fire().
             _borderOpTrack.Value = _borderBox.Checked ? 140 : 0;
         };
@@ -315,7 +317,11 @@ public sealed class FenceAppearanceForm : Form
             if (_presetBox.SelectedItem is string name)
             {
                 var a = FencePresetStore.Load(name);
-                if (a != null) _onPreview?.Invoke(a.Clone());
+                if (a != null)
+                {
+                    _appearance = a.Clone();
+                    SyncControlsFromAppearance();   // updates sliders + fires live preview consistently
+                }
             }
         };
         panel.Controls.Add(_presetBox);
@@ -425,5 +431,55 @@ public sealed class FenceAppearanceForm : Form
         _appearance.BorderOpacity = _borderOpTrack.Value;
         _appearance.TitleFontFamily = _fontBox.SelectedItem as string ?? "Segoe UI";
         _onPreview?.Invoke(_appearance.Clone());
+    }
+
+    /// <summary>Push the current <see cref="_appearance"/> values back into every control. Used after
+    /// loading a preset so the sliders/checkboxes reflect the loaded look (and subsequent edits continue
+    /// from the preset instead of snapping back to the pre-preset values).</summary>
+    private void SyncControlsFromAppearance()
+    {
+        _syncing = true;
+        try
+        {
+            _cornerTrack.Value = _appearance.CornerRadius;
+            _cornerVal!.Text = $"{_appearance.CornerRadius} px";
+            _bodyTrack.Value = _appearance.BodyOpacity;
+            _bodyVal!.Text = $"{_appearance.BodyOpacity}";
+            _headerTrack.Value = _appearance.HeaderOpacity;
+            _headerVal!.Text = $"{_appearance.HeaderOpacity}";
+            _fontTrack.Value = (int)Math.Round(_appearance.TitleFontSize);
+            _fontVal!.Text = $"{_fontTrack.Value} px";
+            _alignBox.SelectedIndex = _appearance.TitleAlign == 1 ? 1 : 0;
+            _glyphBox.Checked = _appearance.ShowGlyph;
+            _frostBox.Checked = _appearance.Frosted;
+            UpdateFrostEnabled();
+            _frostOpacityTrack.Value = _appearance.FrostOpacity;
+            _frostOpacityVal!.Text = $"{_appearance.FrostOpacity}";
+            _shadowBox.Checked = _appearance.BoxShadowEnabled;
+            _shadowOffTrack.Value = _appearance.ShadowOffset;
+            _shadowOffVal!.Text = $"{_appearance.ShadowOffset}";
+            _shadowBlurTrack.Value = _appearance.ShadowBlur;
+            _shadowBlurVal!.Text = $"{_appearance.ShadowBlur}";
+            _shadowOpTrack.Value = _appearance.ShadowOpacity;
+            _shadowOpVal!.Text = $"{_appearance.ShadowOpacity}";
+            _borderBox.Checked = _appearance.BorderOpacity >= 16;
+            _borderRTrack.Value = _appearance.BorderColorR;
+            _borderRVal!.Text = $"{_appearance.BorderColorR}";
+            _borderGTrack.Value = _appearance.BorderColorG;
+            _borderGVal!.Text = $"{_appearance.BorderColorG}";
+            _borderBTrack.Value = _appearance.BorderColorB;
+            _borderBVal!.Text = $"{_appearance.BorderColorB}";
+            _borderOpTrack.Value = _appearance.BorderOpacity;
+            _borderOpVal!.Text = $"{_appearance.BorderOpacity}";
+            _fontBox.SelectedItem = FenceAppearance.IsFontFamilyAllowed(_appearance.TitleFontFamily)
+                ? _appearance.TitleFontFamily : "Segoe UI";
+        }
+        finally
+        {
+            _syncing = false;
+        }
+        // Controls' ValueChanged handlers already fired Fire() per assignment above; one final apply
+        // guarantees the preview matches _appearance exactly.
+        Fire();
     }
 }
