@@ -30,11 +30,11 @@ public sealed class FenceAppearance
     /// <summary>Box drop shadow (additive, drawn behind the box). Off by default.</summary>
     public bool BoxShadowEnabled { get; set; } = false;
     /// <summary>Shadow offset in logical px (applied to both x and y, down-right).</summary>
-    public int ShadowOffset { get; set; } = 6;
+    public int ShadowOffset { get; set; } = 10;
     /// <summary>Shadow blur radius in logical px.</summary>
-    public int ShadowBlur { get; set; } = 12;
+    public int ShadowBlur { get; set; } = 16;
     /// <summary>Shadow opacity (0-255). Uses <see cref="BorderColorR/G/B"/> as the shadow tint.</summary>
-    public int ShadowOpacity { get; set; } = 90;
+    public int ShadowOpacity { get; set; } = 140;
     /// <summary>Custom border color R (0-255). Also reused as the box-shadow tint.</summary>
     public int BorderColorR { get; set; } = 64;
     /// <summary>Custom border color G (0-255).</summary>

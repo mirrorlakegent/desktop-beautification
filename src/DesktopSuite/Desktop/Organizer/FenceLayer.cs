@@ -2548,15 +2548,15 @@ public sealed class FenceLayer
 
     /// <summary>Route B: draw a soft drop shadow behind a fence box. Builds a white rounded-rect mask,
     /// blurs it with the shared <see cref="BoxBlur"/> (which forces alpha to 255, so the blurred RGB
-    /// channel carries the intensity), then composites it tinted via a ColorMatrix that sets A' from the
-    /// mask intensity and RGB' to the chosen shadow color (the border color doubles as the shadow tint).
-    /// Drawn before the box body, offset down-right; fully isolated from the body alpha pipeline
-    /// (never touches FillBodyPixels / CreateDIBSection), so it cannot reintroduce the v13 white-alpha bug.</summary>
+    /// channel carries the intensity), then concentrates it with a power curve (γ&lt;1 makes the core
+    /// dense and edges fall off sharply — critical because the box body covers ~60% of the shadow when
+    /// offset &lt; blur×2.5), then composites tinted via a ColorMatrix.
+    /// Fully isolated from the body alpha pipeline (never touches FillBodyPixels / CreateDIBSection).</summary>
     private void DrawBoxShadow(Graphics g, int left, int top, int w, int h, int r)
     {
         int blur = (int)Math.Round(_appearance.ShadowBlur * _dpiX);
-        if (blur < 1) blur = 1;
-        int margin = blur + 4;                                   // room for the blur to bleed outside the box
+        if (blur < 2) blur = 2;
+        int margin = blur + 4;
         int ox = (int)Math.Round(_appearance.ShadowOffset * _dpiX);
         int oy = (int)Math.Round(_appearance.ShadowOffset * _dpiY);
         int mw = w + margin * 2;
@@ -2573,10 +2573,30 @@ public sealed class FenceLayer
 
         using var blurred = BoxBlur(mask, blur);
 
-        // ColorMatrix rows = output channels [R,G,B,A,W]; cols = input [R,G,B,A,W].
-        // R'/G'/B' = constant shadow color (from the border color); A' = (ShadowOpacity/255) * mask intensity.
-        // Mask is white (RGB=255) blurred → RGB = intensity, A=255 (BoxBlur forces A=255).
-        float s = _appearance.ShadowOpacity / 255f;
+        // Power-curve concentration (γ < 1): makes the shadow core much denser so it stays visible
+        // even where the semi-transparent/frosted box body overlaps it. γ=0.55 gives a steep falloff.
+        const float gamma = 0.55f;
+        var bd = blurred.LockBits(new Rectangle(0, 0, mw, mh), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+        unsafe
+        {
+            byte* p = (byte*)bd.Scan0;
+            int stride = bd.Stride;
+            for (int y = 0; y < mh; y++)
+                for (int x = 0; x < mw; x++)
+                {
+                    int i = y * stride + x * 4;
+                    float v = p[i] / 255f;               // any RGB channel (all equal after blur of white)
+                    float pv = (float)Math.Pow(Math.Max(v, 0f), gamma);   // concentrate
+                    byte b = (byte)(Math.Min(pv * 255f, 255f));
+                    p[i] = b; p[i + 1] = b; p[i + 2] = b;  // write back to all RGB
+                }
+        }
+        blurred.UnlockBits(bd);
+
+        // ColorMatrix: R'/G'/B' = constant shadow color; A' = boost × (ShadowOpacity/255) × concentrated_intensity.
+        // The 1.6x boost compensates for the body overlap problem (user typically has BodyOpacity 120-180,
+        // which covers 47-71% of what's underneath; boosting ensures the remaining 29-53% is still visible).
+        float s = _appearance.ShadowOpacity / 255f * 1.6f;
         var cm = new ColorMatrix(new float[][]
         {
             new float[] { 0, 0, 0, 0, _appearance.BorderColorR / 255f },

@@ -67,11 +67,11 @@ public sealed class AppSettings
     /// <summary>Box drop shadow enabled.</summary>
     public bool FenceBoxShadowEnabled { get; set; }
     /// <summary>Shadow offset in logical px (applied down-right).</summary>
-    public int FenceShadowOffset { get; set; } = 6;
+    public int FenceShadowOffset { get; set; } = 10;
     /// <summary>Shadow blur radius in logical px.</summary>
-    public int FenceShadowBlur { get; set; } = 12;
+    public int FenceShadowBlur { get; set; } = 16;
     /// <summary>Shadow opacity (0-255).</summary>
-    public int FenceShadowOpacity { get; set; } = 90;
+    public int FenceShadowOpacity { get; set; } = 140;
     /// <summary>Custom border color R (0-255). Also the box-shadow tint.</summary>
     public int FenceBorderColorR { get; set; } = 64;
     /// <summary>Custom border color G (0-255).</summary>
