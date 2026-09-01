@@ -98,6 +98,17 @@
     都在与 DWM 缓存搏斗，不可能可靠。正确做法是**不截屏**——直接从数据源（壁纸文件）取内容。
   - **WinForms 高 DPI 弹窗经验**（已固化 skill `winforms-hidpi-layout`）：
     Y 光标按控件真实 `Bottom` 推进、Label 用 `TextRenderer`/GDI 引擎、`AutoScaleMode=Dpi`。
+  - **Route B 外观深化 + 预设（v26, c563de0，待真机复验）**：M4-B 现共 **15 个外观属性**
+    （原 8 + 新增 7：阴影开关/偏移/模糊/不透明度、边框 RGB/不透明度、标题字体族）。
+    - 盒阴影 `DrawBoxShadow`：白遮罩→`BoxBlur`→`ColorMatrix` 按模糊强度着色（阴影色复用边框色），
+      **完全隔离于主体 alpha 管线**（不触碰 v17 的 CreateDIBSection 路径，杜绝白 alpha 回归）。默认关。
+    - 边框：`BorderOpacity>=16` 时用自定义色绘制，否则沿用随主体透明的默认灰边。
+    - 字体：`TitleFontFamily` 白名单（Segoe UI/Microsoft YaHei UI/微软雅黑/SimSun/Consolas 等），
+      加载时非法值回落 Segoe UI 防 `new Font` 抛异常；默认 Segoe UI（外观不变）。
+    - 外观预设 `FencePresetStore`（具名 JSON + `InputBox`）：托盘「🎨 外观预设」子菜单 + 弹窗下拉，
+      内置 默认/玻璃拟态/极简线框 三预设；为 Phase 3 主题引擎种子。
+    - Phase 0 发布安全网 `src/publish-ds2.ps1`（解锁DLL→归档→发布→双远程 ls-remote 校验）。
+    - **状态：已构建发布+推送双远程，待用户真机复验（阴影/边框/字体/预设 + 透明度回归矩阵）。**
 
 ## 部署与启动
 - **部署目标（canonical）= `D:\WorkBuddy\ds2\DesktopSuite.exe`**，自包含单文件发布：

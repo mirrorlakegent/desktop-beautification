@@ -118,3 +118,27 @@ v18 审计其余外观属性（`HeaderOpacity`/`FrostOpacity` 走 ColorMatrix �
 | **v25h** | 毛玻璃 1/3 分辨率模糊+放大，性能优化（本轮发布，待真机复验）。 |
 
 > 核心教训：① 窗口是桌面 WorkerW 子窗口时，"隐藏自己再截屏"必与 DWM 缓存搏斗且不可靠——**直接取数据源**；② 后处理清理**不得无条件覆盖**前置步骤已写入的正确数据（v14 教训）；③ 任何"已修复"结论必须**真机复验**后方可结案。
+
+---
+
+## 7. Route B（v26）外观深化 + 外观预设 — 已落地（待真机复验）
+
+> 提交 `c563de0`，已发布 ds2 并推送 gitee+github 双远程（`git ls-remote` 双方一致）。
+
+M4-B 外观属性由 8 项扩展为 **15 项**。新增能力：
+
+| 能力 | 属性 | 默认 | 说明 |
+|---|---|---|---|
+| 盒阴影 | BoxShadowEnabled / ShadowOffset / ShadowBlur / ShadowOpacity | 关 / 6 / 12 / 90 | 盒外柔和投影，加性绘制 |
+| 边框色 | BorderColorR/G/B / BorderOpacity | 64,70,86 / 0 | 0=沿用随主体透明的默认灰边；≥16=自定义色 |
+| 标题字体 | TitleFontFamily | Segoe UI | 白名单，加载时非法值回落 Segoe UI |
+| 外观预设 | — | — | 具名 JSON 预设，主题引擎种子 |
+
+实现要点：
+- **盒阴影** `DrawBoxShadow`：白遮罩 → `BoxBlur`（强制 alpha=255，模糊强度存于 RGB 通道）→ `ColorMatrix` 按强度着色（阴影色复用边框色）。**完全隔离于主体 alpha 管线**，不触碰 v17 根治的 `CreateDIBSection` 路径，故不会重现白 alpha bug。默认关闭，无性能影响。
+- **边框**：`BorderOpacity>=16` 时用自定义色描边；否则维持原有"随主体透明度"的灰边（外观不变）。
+- **字体**：标题改读 `TitleFontFamily`，复用 v8 的 `TextRenderer` + emoji 回退；白名单防 `new Font` 抛异常。
+- **预设** `FencePresetStore`：序列化 `FenceAppearance` 到 `%LocalAppData%\DesktopSuite\appearance-presets\`；托盘「🎨 外观预设」子菜单 + 弹窗下拉可存可取；内置 **默认 / 玻璃拟态 / 极简线框** 三预设。
+- **Phase 0 安全网**：`src/publish-ds2.ps1` 固化「解锁 DLL → 归档旧 exe → 单文件发布 → 双远程 ls-remote 校验」。
+
+**真机复验清单（v26 待用户确认）**：① 勾选盒阴影→盒外出现柔和投影且不影响主体透明；② 自定义边框色生效且低不透明度不出现白边；③ 切换标题字体（如微软雅黑）标题正常、emoji 不丢失；④ 选预设/存预设即时生效；⑤ 跑透明度回归矩阵（BodyOpacity=0/15/255、HeaderOpacity=0/10/30、Frosted 开）无回归。
