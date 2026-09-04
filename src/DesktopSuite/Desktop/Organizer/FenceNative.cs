@@ -162,6 +162,10 @@ internal static class FenceNative
     // NCHITTEST return values — enable resize on edges/corners, HTCLIENT for interior (drag-move)
     public const int HTNOWHERE = 0;
     public const int HTCLIENT = 1;
+    // HTTRANSPARENT = -1: the point is transparent — let the hit-test fall through to the window
+    // beneath (the desktop). Used so the box-shadow halo (inside the window region but outside any
+    // box) passes clicks through instead of being swallowed by the invisible shadow.
+    public const int HTTRANSPARENT = -1;
     public const int HTLEFT = 10;
     public const int HTRIGHT = 11;
     public const int HTTOP = 12;

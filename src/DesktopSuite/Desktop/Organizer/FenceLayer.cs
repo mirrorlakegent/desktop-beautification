@@ -549,10 +549,28 @@ public sealed class FenceLayer
                 // Teardown is driven by Close(); do not unregister the class here.
                 return IntPtr.Zero;
             case FenceNative.WM_NCHITTEST:
+            {
                 // Layered + no-activate windows do not get reliable system resize from WS_THICKFRAME,
-                // so we route ALL hits to HTCLIENT and implement resize ourselves in OnLButtonDown /
+                // so we route hits to HTCLIENT and implement resize ourselves in OnLButtonDown /
                 // OnMouseMove. This also keeps drag-move working.
-                return FenceNative.HTCLIENT;
+                // Route B (盒阴影): the window hit-region now includes the shadow halo (so the shadow is
+                // visible). Points inside a box / the add-tile must stay HTCLIENT (interactive); points in
+                // the halo (inside the region but outside any box) return HTTRANSPARENT so clicks fall
+                // through to the desktop instead of being swallowed by the invisible shadow.
+                int sx = FenceNative.GET_X_LPARAM(lParam);
+                int sy = FenceNative.GET_Y_LPARAM(lParam);
+                var pt = new FenceNative.POINT { X = sx, Y = sy };
+                FenceNative.ScreenToClient(_hwnd, ref pt);   // lParam is screen coords for WM_NCHITTEST
+                bool onBox = false;
+                foreach (var b in _boxRects)
+                    if (pt.X >= b.Left && pt.X < b.Right && pt.Y >= b.Top && pt.Y < b.Bottom) { onBox = true; break; }
+                if (!onBox && _addTileRect.HasValue)
+                {
+                    var t = _addTileRect.Value;
+                    if (pt.X >= t.Left && pt.X < t.Right && pt.Y >= t.Top && pt.Y < t.Bottom) onBox = true;
+                }
+                return onBox ? FenceNative.HTCLIENT : FenceNative.HTTRANSPARENT;
+            }
 
             case FenceNative.WM_SETCURSOR:
             {
@@ -2551,8 +2569,11 @@ public sealed class FenceLayer
     /// channel carries the intensity), then concentrates it with a power curve (γ&lt;1 makes the core
     /// dense and edges fall off sharply — critical because the box body covers ~60% of the shadow when
     /// offset &lt; blur×2.5), then composites tinted via a ColorMatrix.
-    /// Fully isolated from the body alpha pipeline (never touches FillBodyPixels / CreateDIBSection).</summary>
-    private void DrawBoxShadow(Graphics g, int left, int top, int w, int h, int r)
+    /// <summary>Route B (盒阴影): the on-screen destination rectangle the shadow bitmap is painted
+    /// into, in window/client coordinates. Single source of truth shared by <see cref="DrawBoxShadow"/>
+    /// (paint) and <see cref="ApplyRegion"/> (expand the hit-region so the shadow is not clipped away
+    /// by SetWindowRgn).</summary>
+    private Rectangle ShadowRect(int left, int top, int w, int h, int r)
     {
         int blur = (int)Math.Round(_appearance.ShadowBlur * _dpiX);
         if (blur < 2) blur = 2;
@@ -2561,6 +2582,20 @@ public sealed class FenceLayer
         int oy = (int)Math.Round(_appearance.ShadowOffset * _dpiY);
         int mw = w + margin * 2;
         int mh = h + margin * 2;
+        return new Rectangle(left - margin + ox, top - margin + oy, mw, mh);
+    }
+
+    /// <summary>Route B (盒阴影): paint a soft drop-shadow beneath/around a box. Drawn into an offscreen
+    /// mask, blurred, concentrated by a power curve, then tinted via a ColorMatrix and composited onto g.
+    /// Fully isolated from the body alpha pipeline (never touches FillBodyPixels / CreateDIBSection).</summary>
+    private void DrawBoxShadow(Graphics g, int left, int top, int w, int h, int r)
+    {
+        var sr = ShadowRect(left, top, w, h, r);
+        int mw = sr.Width;
+        int mh = sr.Height;
+        int blur = (int)Math.Round(_appearance.ShadowBlur * _dpiX);
+        if (blur < 2) blur = 2;
+        int margin = blur + 4;   // must match ShadowRect so the white mask aligns inside sr
 
         using var mask = new Bitmap(mw, mh, PixelFormat.Format32bppArgb);
         using (var mg = Graphics.FromImage(mask))
@@ -2608,9 +2643,7 @@ public sealed class FenceLayer
         using var ia = new ImageAttributes();
         ia.SetColorMatrix(cm);
 
-        g.DrawImage(blurred,
-            new Rectangle(left - margin + ox, top - margin + oy, mw, mh),
-            0, 0, mw, mh, GraphicsUnit.Pixel, ia);
+        g.DrawImage(blurred, sr, 0, 0, mw, mh, GraphicsUnit.Pixel, ia);
     }
 
     /// <summary>M4-B frosted glass: load the current wallpaper, blur it, and cache as _frostBmp.
@@ -3043,8 +3076,24 @@ public sealed class FenceLayer
             int fr = (int)Math.Round(_appearance.CornerRadius * _dpiX);
             foreach (var b in _boxRects)
             {
+                int w = b.Right - b.Left;
+                int h = b.Bottom - b.Top;
                 IntPtr rgn = FenceNative.CreateRoundRectRgn(b.Left, b.Top, b.Right, b.Bottom, fr, fr);
                 if (rgn == IntPtr.Zero) continue;
+                // Route B (盒阴影): the shadow is painted OUTSIDE the box bounds. SetWindowRgn clips the
+                // layered window to exactly the region we set, so without expanding it here the shadow is
+                // clipped away and never composited (the "盒阴影没有效果" bug). Union the shadow's
+                // destination rectangle into the hit-region so the shadow becomes visible.
+                if (_appearance.BoxShadowEnabled)
+                {
+                    var sr = ShadowRect(b.Left, b.Top, w, h, fr);
+                    IntPtr srgn = FenceNative.CreateRoundRectRgn(sr.X, sr.Y, sr.X + sr.Width, sr.Y + sr.Height, fr, fr);
+                    if (srgn != IntPtr.Zero)
+                    {
+                        FenceNative.CombineRgn(rgn, rgn, srgn, FenceNative.RGN_OR);
+                        FenceNative.DeleteObject(srgn);
+                    }
+                }
                 if (combined == null)
                     combined = rgn;
                 else
@@ -3075,7 +3124,7 @@ public sealed class FenceLayer
             {
                 FenceNative.SetWindowRgn(_hwnd, combined.Value, true);
                 // SetWindowRgn takes ownership of the region; do not DeleteObject(combined).
-                HostLog.Write($"FenceLayer.ApplyRegion：boxes={_boxRects.Count} addTile={_addTileRect.HasValue} → 命中区已应用");
+                HostLog.Write($"FenceLayer.ApplyRegion：boxes={_boxRects.Count} addTile={_addTileRect.HasValue} 阴影={_appearance.BoxShadowEnabled} → 命中区已应用");
             }
             else
             {
