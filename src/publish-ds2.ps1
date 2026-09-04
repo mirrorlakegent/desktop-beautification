@@ -1,10 +1,10 @@
 # DesktopSuite 发布安全网脚本 (Phase 0)
-# 固化历史踩坑：① 发布前解锁 DLL（否则 MSB3027）② 归档上一版 exe 以便回退
-# ③ 单文件发布 ④ 双远程推送 + git ls-remote 校验（防 gitee SSH 假 "Everything up-to-date"）
+# 固化历史踩坑：1) 发布前解锁 DLL（否则 MSB3027） 2) 归档上一版 exe 以便回退
+# 3) 单文件发布 4) 双远程推送 + git ls-remote 校验（防 gitee SSH 假 Everything up-to-date）
 #
 # 用法（在桌面/用户机器，需已配置 SSH 双远程）：
 #   powershell -ExecutionPolicy Bypass -File src\publish-ds2.ps1
-# 注意：本脚本只负责「发布+推送+校验」，提交(commit)请单独用 git commit 完成。
+# 注意：本脚本只负责发布+推送+校验，提交(commit)请单独用 git commit 完成。
 
 $ErrorActionPreference = "Stop"
 
@@ -23,18 +23,13 @@ if (Test-Path $exe) {
     $stamp = (git -C $repo rev-parse --short HEAD 2>$null)
     $date  = Get-Date -Format "yyyyMMdd"
     Copy-Item $exe "$archive\DesktopSuite_${date}_${stamp}.exe" -Force
-    Get-ChildItem $archive -Filter "DesktopSuite_*.exe" |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -Skip 5 |
-        Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $archive -Filter "DesktopSuite_*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Force -ErrorAction SilentlyContinue
     Write-Host "已归档上一版 exe 到 $archive"
 }
 
-# 3) 单文件自包含发布
+# 3) 单文件自包含发布（dotnet publish 写在一行，避免反引号续行踩坑）
 Set-Location $src
-dotnet publish -c Release -r win-x64 `
-    -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true `
-    -o D:\WorkBuddy\ds2
+dotnet publish -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o D:\WorkBuddy\ds2
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败 (exit $LASTEXITCODE)" }
 Write-Host "发布完成：$exe"
 
@@ -46,7 +41,7 @@ $github = (git -C $repo ls-remote github master)  -split '\s' | Select-Object -F
 Write-Host "gitee  : $gitee"
 Write-Host "github : $github"
 if ($gitee -ne $github) {
-    Write-Warning "⚠ 双远程 HEAD 不一致！请检查推送结果。"
+    Write-Warning "双远程 HEAD 不一致！请检查推送结果。"
     exit 1
 }
-Write-Host "✅ 双远程校验一致，发布安全网通过。"
+Write-Host "双远程校验一致，发布安全网通过。"
